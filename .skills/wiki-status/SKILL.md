@@ -19,8 +19,17 @@ You are computing the current state of the wiki: what's been ingested, what's ne
 
 ## Before You Start
 
+**Writing profile:** Before drafting or rewriting natural-language Markdown,
+read and apply `Writing Profile Resolution` in `llm-wiki/SKILL.md`. Framework
+schema, provenance, safety, and operation-specific requirements take precedence.
+Apply preferences only to generated `_insights.md` prose; keep deterministic
+analysis snapshots verbatim.
+
 1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md` (inline `@name` override → walk up CWD for `.env` → global config → prompt setup). This gives `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_SOURCES_DIR`, `CLAUDE_HISTORY_PATH`, and `CODEX_HISTORY_PATH`.
 2. Read `.manifest.json` at the vault root — this is the ingest tracking ledger
+3. Run `obsidian-wiki source-state "$OBSIDIAN_VAULT_PATH"` when continuous sources are configured. Missing source state means "not configured", not an error.
+4. Run `obsidian-wiki source-bundles "$OBSIDIAN_VAULT_PATH"` when the vault contains `_sources/`. Treat a hash mismatch as an evidence-integrity failure, separate from ingest delta.
+5. Run `obsidian-wiki backlog "$OBSIDIAN_VAULT_PATH" --json --pretty` to summarize deterministic maintenance debt. Missing `_backlog.md` is not an error; it is generated only on explicit `--write`.
 
 ## The Manifest
 
@@ -134,6 +143,21 @@ For Codex history specifically, also compute:
 
 Include this in the Overview section as `Page visibility: N public · M internal · K pii`. Skip the line if all pages are untagged (fully public vault).
 
+For continuous sources, report the generic source-state summary separately:
+
+- `observed_cursor` means source data is durably captured.
+- `applied_cursor` means all required wiki artifacts are complete.
+- Unequal cursors are pending debt; never compare opaque cursors by ordering.
+- Heartbeat error/staleness is independent of debt and never advances a cursor.
+
+Do not infer this state from `.manifest.json`, and do not expose
+provider-specific credentials or adapter internals.
+
+For deterministic maintenance debt, report the backlog summary separately from
+the human-facing recommendation. The backlog combines source-state debt,
+source-bundle integrity, entity/source closure, project-timeline drift, and
+manifest filesystem drift. It is a maintenance queue, not a semantic TODO list.
+
 Present a clear summary:
 
 ```markdown
@@ -146,6 +170,7 @@ Present a clear summary:
 - **Projects tracked:** 6
 - **Last ingest:** 2026-04-06T11:00:00Z
 - **Staged writes pending:** 4 pages · 2 patches (oldest: 3 days ago)  ← only when WIKI_STAGED_WRITES=true
+- **Continuous sources:** 4 tracked · 1 debt · 1 stale · 0 errors  ← only when source state exists
 
 ## Delta (what's changed since last ingest)
 
@@ -227,6 +252,15 @@ Replace the old single-line Recommendation with a ranked **What to Do Next** sec
 5. **Source delta** — from Step 2: count of new + modified sources ready to ingest.
 
 6. **Lint issues** — check `log.md` for a recent `/wiki-lint` run (within last 30 days). If a recent run recorded broken links or missing frontmatter, surface the count. If no lint run appears in the log, flag "lint not run recently".
+
+7. **Project timeline drift** — run
+   `obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH" --check`.
+   Surface drift or malformed generated markers. This check is read-only;
+   membership comes from `projects:` metadata, never from project mentions.
+
+8. **Continuous-source debt/health** — use `source-state` output. Rank failures
+   first, then stale heartbeat, then unapplied debt. Recommend the responsible
+   adapter or ingest workflow; this status skill never advances cursors.
 
 ### 4b: Rank and render
 
@@ -516,6 +550,7 @@ This is the repeated-game view: a source that keeps producing pages needing repa
 - This skill only reads and reports — it doesn't modify anything (except writing `_insights.md` in insights mode, which is regenerable)
 - The actual ingest work is done by the ingest skills (`wiki-ingest`, `claude-history-ingest`, `codex-history-ingest`)
 - Those skills are responsible for updating the manifest after they finish
+- Source-state and project metadata are opt-in; do not migrate or rewrite an existing vault merely to produce a status report
 
 ## QMD Refresh After Vault Writes
 

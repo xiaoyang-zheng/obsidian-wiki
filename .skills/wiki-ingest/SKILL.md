@@ -7,7 +7,7 @@ description: >
   journal entries, browser bookmarks, email archives, text dumps), AND web URLs. Use whenever the
   user wants to add new sources to their wiki: "add this to the wiki", "process these docs", "ingest
   this folder", "ingest this data", "process this export/logs", "import my chat history from X",
-  "/ingest-url <url>", "add this URL", "save this page", or pastes a URL and says "add this" /
+  "/ingest-url URL", "add this URL", "save this page", or pastes a URL and says "add this" /
   "save this to my wiki". Also triggers when the user drops a file, or for raw mode: "process my
   drafts", "promote my raw pages", or any reference to the _raw/ staging directory. This is the
   general catch-all ingest skill for any document, text, or URL source not covered by a more
@@ -20,11 +20,30 @@ You are ingesting source documents into an Obsidian wiki. Your job is not to sum
 
 ## Before You Start
 
+**Writing profile:** Before drafting or rewriting natural-language Markdown,
+read and apply `Writing Profile Resolution` in `llm-wiki/SKILL.md`. Framework
+schema, provenance, safety, and operation-specific requirements take precedence.
+Preserve source content and structured records.
+
 1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md` (inline `@name` override → walk up CWD for `.env` → global config → prompt setup). This gives `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_SOURCES_DIR`, `OBSIDIAN_LINK_FORMAT` (default: `wikilink`), and `WIKI_STAGED_WRITES`. Only read the specific variables you need — do not log, echo, or reference any other values from these files.
 2. **Check `WIKI_STAGED_WRITES`** — if set to `true`, all new and updated category pages go to `_staging/<category>/` instead of their final location. Tell the user at the start of the ingest: "Staged writes mode is enabled — pages will land in `_staging/` for your review. Run `/wiki-stage-commit` when ready to promote."
 3. Read `.manifest.json` at the vault root to check what's already been ingested
 4. Read `index.md` to understand current wiki content
 5. Read `log.md` to understand recent activity
+
+When the user needs durable evidence, local figures, or later re-verification,
+capture the original source before distillation. Choose a stable bundle id and
+run:
+
+```bash
+obsidian-wiki source-bundle-create "$OBSIDIAN_VAULT_PATH" \
+  --id <bundle-id> --source <local-source-file> --source-type <type> \
+  --media <local-media-file>
+```
+
+Use only local files here. A provider-specific adapter may first download a
+temporary attachment, but the generic command must never receive credentials or
+a remote URL to fetch. Never modify or replace bundle artifacts after capture.
 
 When writing internal links in Step 5, apply the link format described in `llm-wiki/SKILL.md` (Link Format section) according to the `OBSIDIAN_LINK_FORMAT` value you read.
 
@@ -63,6 +82,24 @@ After ingesting each source, record its hash:
 ```bash
 obsidian-wiki cache-update "$OBSIDIAN_VAULT_PATH" <source> --pages <page1> [page2 ...]
 ```
+
+When a continuous adapter supplies a stable source ID and opaque cursor, keep
+its recoverability state separate:
+
+```bash
+# Adapter does this after raw input is durable:
+obsidian-wiki source-state-update "$OBSIDIAN_VAULT_PATH" --source <id> \
+  --observed-cursor <cursor> --heartbeat-ok
+
+# Do this only after pages, metadata, and required derived artifacts succeed:
+obsidian-wiki source-state-update "$OBSIDIAN_VAULT_PATH" --source <id> \
+  --applied-cursor <cursor>
+```
+
+Never advance `applied` on a partial/failed ingest. A heartbeat error moves
+neither cursor. `observed != applied` is debt; cursors are opaque and must not
+be ordered or interpreted by this skill. The adapter owns its provider-specific
+fetch/auth logic; the wiki core owns only generic state.
 
 **Fallback** (if `obsidian-wiki` is not installed): compute hashes manually with `sha256sum -- "<file>"` (Linux) or `shasum -a 256 -- "<file>"` (macOS) and compare against `content_hash` in `.manifest.json`. If the entry has no `content_hash`, fall back to mtime comparison.
 
@@ -343,8 +380,16 @@ If the source belongs to a specific project:
 - Place project-specific knowledge under `projects/<project-name>/<category>/`
 - Place general knowledge in global category directories
 - Create or update the project overview at `projects/<name>/<name>.md` (named after the project — never `_project.md`, as Obsidian uses filenames as graph node labels)
+- Add `projects: [<project-name>]` to every page that is actual project evidence. Use a list even for one project; one page may belong to several projects.
+- For a page distilled from an immutable source bundle, write `source_bundle: <bundle-id>` and either `entities: [entities/<canonical-name>, ...]` or `entities: none`. Do not infer entities from tags or ordinary mentions.
+- Link every declared entity in the source page body, then add a backlink to this source page from each entity page. Use a bundle-relative attachment path such as `![[../_sources/<bundle-id>/media/figure-1.png]]` only after the local media copy exists.
+- Add `timeline_date: YYYY-MM-DD` and a concise `timeline_blurb:` when the source represents a dated project event. If `created` is already the correct event date, `timeline_date` may be omitted.
 
 If the source is not project-specific, put everything in global categories.
+
+A project wikilink, typed relationship, tag, or passing textual reference is
+only a mention. Never infer membership from a mention. Do not write the legacy
+singular `project:` field; it is read-only compatibility for existing vaults.
 
 ### Step 4: Plan Updates
 
@@ -401,6 +446,7 @@ For each page in your plan:
 - Place in the correct category directory
 - Add `[[wikilinks]]` to at least 2-3 existing pages
 - Include the source in the `sources` frontmatter field. In raw mode: derive from `capture_source` + `sources` frontmatter of the `_raw/` file — never use the `_raw/` path itself (see Raw Mode section)
+- When Step 3 established membership, include the `projects:` and optional timeline fields there; keep ordinary project mentions in the body.
 
 **If updating an existing page:**
 - Read the current page first
@@ -497,7 +543,20 @@ updated: TIMESTAMP
 ## Flagged Contradictions
 ```
 
-### Step 8: Refresh QMD Wiki Index (optional — requires `QMD_WIKI_COLLECTION`)
+### Step 8: Rebuild Project Timelines
+
+If any accepted live page's `projects:`, `timeline_date`, `timeline_blurb`,
+`created`, `summary`, or title changed, run:
+
+```bash
+obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH"
+```
+
+In staged-write mode, do not materialize entries for pending category pages;
+`wiki-stage-commit` rebuilds timelines after promotion. Never edit the generated
+marker block by hand.
+
+### Step 9: Refresh QMD Wiki Index (optional — requires `QMD_WIKI_COLLECTION`)
 
 **GUARD: If `$QMD_WIKI_COLLECTION` is empty or unset, skip this step.** The markdown vault is still the source of truth; QMD is a search index.
 
@@ -535,6 +594,12 @@ Record QMD refresh in the final report as one of:
 - `QMD skipped: qmd CLI unavailable`
 - `QMD failed: <short error summary>`
 
+If this ingest is attached to continuous source state, advance its
+`applied-cursor` only after this step and every other required artifact has
+succeeded. In staged-write mode, do not claim live application merely because
+files entered `_staging/`; the calling adapter or review workflow must define
+and prove completion.
+
 ## Handling Multiple Sources
 
 When ingesting a directory, process sources one at a time but maintain a running awareness of the full batch. Later sources may strengthen or contradict earlier ones — that's fine, just update pages as you go.
@@ -551,6 +616,11 @@ After ingesting, verify:
 - [ ] Inferred and ambiguous claims are marked with `^[inferred]` / `^[ambiguous]`; `provenance:` frontmatter block is present on new and updated pages
 - [ ] Every new/updated page has a `summary:` frontmatter field (1–2 sentences, ≤200 chars)
 - [ ] `relationships:` block is present on pages where source text made typed connections clear; all entries use an allowed type from `llm-wiki/SKILL.md`
+- [ ] Project evidence has explicit `projects:` membership; project mentions alone did not create membership
+- [ ] Bundle-backed pages have `source_bundle:` plus explicit `entities:` or `entities: none`
+- [ ] Every declared entity has a source-page link and a reciprocal entity-page backlink
+- [ ] Important images/attachments are copied into the bundle rather than left as temporary remote URLs
+- [ ] Project timelines were rebuilt after live membership/timeline changes (or deferred to `wiki-stage-commit`)
 - [ ] If `QMD_WIKI_COLLECTION` is set and the QMD CLI is available, `qmd update` has run after writing pages
 - [ ] If QMD reports missing vectors or embeddings may be stale, `qmd embed` has run
 - [ ] QMD refresh status is included in the final report

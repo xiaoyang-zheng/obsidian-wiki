@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from obsidian_wiki.lint import lint_vault
+from obsidian_wiki.projects import TIMELINE_BEGIN, TIMELINE_END
 from obsidian_wiki.trust import (
     build_trust_ledger,
     check_trust_ledger,
@@ -104,6 +105,26 @@ def test_claim_change_invalidates_review_but_updated_timestamp_does_not(tmp_path
     report = check_trust_ledger(vault, ledger_path)
     assert report["status"] == "warn"
     assert report["stale"] == [{"page": "concepts/alpha.md", "reason": "material_fingerprint_changed"}]
+
+
+def test_generated_project_timeline_does_not_change_material_fingerprint(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    page = _page(vault, "projects/demo.md", confidence=0.53)
+    generated_v1 = f"{TIMELINE_BEGIN}\n- [[source-a]]\n{TIMELINE_END}"
+    generated_v2 = f"{TIMELINE_BEGIN}\n- [[source-b]]\n{TIMELINE_END}"
+    baseline = page_fingerprint(page)
+    ledger_path = _write_ledger(vault)
+
+    page.write_text(page.read_text() + generated_v1 + "\n", encoding="utf-8")
+    assert page_fingerprint(page) == baseline
+    assert check_trust_ledger(vault, ledger_path)["counts"]["reviewed"] == 1
+
+    page.write_text(
+        page.read_text().replace(generated_v1, generated_v2),
+        encoding="utf-8",
+    )
+    assert page_fingerprint(page) == baseline
+    assert check_trust_ledger(vault, ledger_path)["counts"]["reviewed"] == 1
 
 
 def test_material_change_marks_review_stale(tmp_path: Path) -> None:

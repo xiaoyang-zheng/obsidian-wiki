@@ -13,8 +13,8 @@ from typing import Any, Iterable
 DEFAULT_BUDGET = 8_000
 MIN_BUDGET = 256
 MAX_BUDGET = 100_000
-SKIP_DIRS = frozenset({"_raw", "_staging", "_archives", "_archived", "_readouts", ".obsidian", ".git"})
-SKIP_FILES = frozenset({"AGENTS.md", "CLAUDE.md", "GEMINI.md", "hot.md", "index.md", "log.md", "_insights.md"})
+SKIP_DIRS = frozenset({"_raw", "_sources", "_staging", "_archives", "_archived", "_readouts", ".obsidian", ".git"})
+SKIP_FILES = frozenset({"AGENTS.md", "CLAUDE.md", "GEMINI.md", "hot.md", "index.md", "log.md", "_insights.md", "_backlog.md"})
 BLOCKED_PUBLIC_TAGS = frozenset({"visibility/internal", "visibility/pii"})
 TIER_ORDER = {"core": 0, "supporting": 1, "peripheral": 2}
 _FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---(?:\r?\n|$)", re.DOTALL)

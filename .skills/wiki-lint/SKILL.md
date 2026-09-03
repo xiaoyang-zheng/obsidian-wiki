@@ -18,6 +18,12 @@ You are performing a health check on an Obsidian wiki. Your goal is to find and 
 
 ## Before You Start
 
+**Writing profile:** Before drafting or rewriting natural-language Markdown,
+read and apply `Writing Profile Resolution` in `llm-wiki/SKILL.md`. Framework
+schema, provenance, safety, and operation-specific requirements take precedence.
+Apply preferences only to generated prose reports; deterministic findings retain
+their required formats.
+
 1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md` (inline `@name` override → walk up CWD for `.env` → global config → prompt setup). This gives `OBSIDIAN_VAULT_PATH` plus any `OBSIDIAN_ALLOWED_LIFECYCLES`, `OBSIDIAN_ALLOWED_RELATIONSHIP_TYPES`, `OBSIDIAN_REQUIRED_TRUST_FIELDS`, and `OBSIDIAN_SCHEMA_SOURCE` values.
 2. **Read owner rules** — if `$OBSIDIAN_VAULT_PATH/AGENTS.md` exists, read it before interpreting any schema. Owner rules override framework defaults.
 3. **Form the effective schema** — record the schema source locator plus effective required/optional frontmatter, lifecycle values, relationship types, and provenance markers. Framework values are defaults; preserve owner extensions and relaxed requiredness exactly. Never coerce an owner type to a framework type.
@@ -33,6 +39,12 @@ Schema precedence is CLI flags > resolved environment/config values > framework 
 Run these checks in order. Report findings as you go.
 
 **Scope:** skip `_archives/`, `_raw/`, `_readouts/`, and `.obsidian/` in every check. These hold frozen snapshots, unprocessed staging drafts, and derived readouts (saved by `wiki-narrate`) — they are not knowledge-graph pages, so orphan, frontmatter, and link checks don't apply to them.
+
+Before extracting body links, exclude the complete block between
+`<!-- BEGIN obsidian-wiki:auto-project-timeline -->` and its matching END
+marker. Those links are generated navigation derived from membership, not
+semantic evidence, and must not affect orphan, hub, bridge, or broken-link
+counts. Malformed markers are reported by the project checks below.
 
 ### 1. Orphaned Pages
 
@@ -175,6 +187,65 @@ Find pages in `misc/` that have accumulated enough project affinity to be promot
 **How to fix:**
 - Run the `cross-linker` skill first if affinity scores look stale (e.g., `affinity: {}` on a page with many wikilinks)
 - To promote: move the page to `projects/<project-name>/references/` (or another appropriate category), update its `category` frontmatter, remove `promotion_status`, and grep the vault for backlinks to update them
+
+### 10a. Project Membership and Timeline Integrity
+
+Project membership is declared by `projects:`. Body links, typed
+relationships, and tags are mentions only and must not be treated as
+membership.
+
+Run the deterministic check:
+
+```bash
+obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH" --check --json --pretty
+```
+
+Report its structured errors and drift, including invalid or missing project
+targets, conflicting legacy metadata, ambiguous flat/folder overview pages,
+invalid timeline dates, malformed generated markers, and out-of-date timeline
+blocks. Do not make `projects:` globally required: old and non-project pages
+remain valid. Do not repair generated blocks inside consolidate mode; use the
+renderer after the user approves relevant metadata fixes.
+
+### 10b. Source Bundle and Entity Closure
+
+Source bundles are opt-in durable evidence under `_sources/<bundle-id>/`.
+Run the deterministic verifier before interpreting a bundle-backed page as
+complete:
+
+```bash
+obsidian-wiki source-bundles "$OBSIDIAN_VAULT_PATH" --pretty
+```
+
+For each page declaring `source_bundle:`, require an existing valid bundle and
+an explicit `entities: [entities/<name>, ...]` or `entities: none`. Every
+declared entity must exist, be linked by the source page, and link back to the
+source page. Report these as hard failures:
+
+- `invalid_source_bundles`
+- `invalid_source_bundle_bindings`
+- `missing_source_bundle_targets`
+- `missing_source_entities`
+- `missing_source_entity_links`
+- `missing_entity_source_backlinks`
+
+Do not apply automatic repair to source bundles. Artifacts are immutable; create
+a new bundle when the evidence differs. Pages without `source_bundle:` are not
+subject to this contract.
+
+### 10c. Backlog Queue
+
+Run the aggregate read-only maintenance queue when the user asks what remains
+to fix or when several deterministic checks are relevant:
+
+```bash
+obsidian-wiki backlog "$OBSIDIAN_VAULT_PATH" --json --pretty
+```
+
+Use backlog output to prioritize findings across source-state debt, source
+bundle integrity, closure failures, project timeline drift, and manifest
+filesystem drift. Only write `_backlog.md` with `--write` when the user asks for
+a generated queue file.
 
 ### 12. Confidence and Lifecycle Schema
 
@@ -417,6 +488,11 @@ Pages in misc/ that have ≥ 3 connections to a single project and are ready to 
 |---|---|---|
 | `misc/web-martinfowler-articles-microservices.md` | `obsidian-wiki` | 4 |
 
+### Project Membership and Timeline Issues (N found)
+- `references/release.md` — projects references missing project `alpha`
+- `projects/alpha/alpha.md` — generated timeline is out of date; run `project-timelines`
+- `projects/beta.md` — malformed generated timeline markers
+
 ### Typed Relationship Issues (N found)
 - `concepts/foo.md` — relationships[1]: type "contradication" is not an allowed type
 - `concepts/bar.md` — relationships[0]: target "[[skills/nonexistent]]" resolves to no page
@@ -434,7 +510,7 @@ Concept pairs that co-occur frequently but have no synthesis page:
 
 Append to `log.md`:
 ```
-- [TIMESTAMP] LINT issues_found=N orphans=X broken_links=Y stale=Z contradictions=W prov_issues=P missing_summary=S fragmented_clusters=F visibility_issues=V promotion_candidates=C synthesis_gaps=G relationship_issues=R
+- [TIMESTAMP] LINT issues_found=N orphans=X broken_links=Y stale=Z contradictions=W prov_issues=P missing_summary=S fragmented_clusters=F visibility_issues=V promotion_candidates=C project_issues=J synthesis_gaps=G relationship_issues=R
 ```
 
 Offer to fix issues automatically or let the user decide which to address.

@@ -14,6 +14,9 @@ You are distilling knowledge from the current project into the user's Obsidian w
 
 ## Before You Start
 
+**Writing profile:** Before drafting or rewriting natural-language Markdown, read and apply the `Writing Profile Resolution` section in `llm-wiki/SKILL.md`. Framework schema, provenance, safety, and operation-specific requirements take precedence.
+`WRITING.md` preferences apply only to newly drafted or rewritten natural-language Markdown; preserve source content and structured records.
+
 1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md` (inline `@name` override → walk up CWD for `.env` → global config → prompt setup). This gives `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_WIKI_REPO`, `OBSIDIAN_LINK_FORMAT` (`wikilink` default or `markdown`), and optional QMD settings such as `QMD_WIKI_COLLECTION`. Works from any project directory.
 3. Read `$OBSIDIAN_VAULT_PATH/.manifest.json` to check if this project has been synced before.
 4. Read `$OBSIDIAN_VAULT_PATH/index.md` to know what the wiki already contains.
@@ -115,6 +118,19 @@ The overview page (`<project-name>.md`) should have:
 - What the project is (one paragraph)
 - Key concepts and how they connect
 - Links to project-specific and global wiki pages
+
+Every page that is actual evidence for this project gets:
+
+```yaml
+projects: [<project-name>]
+timeline_date: YYYY-MM-DD      # optional when created is the event date
+timeline_blurb: >-             # optional; concise project event
+  What changed and why it matters.
+```
+
+Use `projects:` even for a single project. A project wikilink, relationship,
+tag, or textual reference is only a mention and must not create membership.
+Do not newly write the legacy singular `project:` field.
 
 ### Global knowledge
 
@@ -221,6 +237,19 @@ Append:
 Read `$OBSIDIAN_VAULT_PATH/hot.md` (create from the template in `wiki-ingest` if missing). Rewrite **Recent Activity** with what was just synced — last 3 operations max. Update **Active Threads** if this project is an ongoing focus. Update **Key Takeaways** with the most important architectural insight or decision surfaced during this sync. Update `updated` timestamp.
 
 Write conceptually: "Synced obsidian-wiki — added wiki-capture and wiki-research skills, core new capabilities are autonomous web research and conversation capture."
+
+### Rebuild generated project timelines
+
+After all live pages and tracking files are successfully written, run:
+
+```bash
+obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH"
+```
+
+The command derives entries from membership metadata and owns only its
+namespaced generated block in each overview. Do not edit that block manually.
+If page writes fail, do not rebuild the timeline and do not claim the update
+complete.
 
 ## Step 7: Refresh QMD Wiki Index (optional — requires `QMD_WIKI_COLLECTION`)
 

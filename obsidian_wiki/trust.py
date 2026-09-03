@@ -21,13 +21,15 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from obsidian_wiki.projects import strip_generated_project_timeline
+
 TRUST_LEDGER_RELATIVE_PATH = Path("_meta/trust-ledger.json")
 TRUST_LEDGER_SCHEMA_VERSION = 1
 TRUST_REVIEW_METHOD = "manual-lineage-and-claim-coverage-v1"
 TRUST_SKIP_DIRS = frozenset(
-    "_raw _archived _staging _archives _bootstrap .obsidian .git".split()
+    "_raw _sources _archived _staging _archives _bootstrap .obsidian .git".split()
 )
-TRUST_RESERVED_STEMS = frozenset({"index", "log", "hot", "_insights"})
+TRUST_RESERVED_STEMS = frozenset({"index", "log", "hot", "_insights", "_backlog"})
 ALLOWED_LIFECYCLES = frozenset({"draft", "reviewed", "verified", "disputed", "archived"})
 # Transitions the llm-wiki state machine forbids outright: only ingest sets
 # `draft`, so nothing may fall back to it, and `archived` is terminal (a restore
@@ -232,7 +234,7 @@ def page_fingerprint(
     match = _FRONTMATTER_RE.match(text)
     assert match is not None
     stable_frontmatter = _strip_volatile_confidence_fields(metadata["frontmatter"])
-    body = text[match.end() :].strip()
+    body = strip_generated_project_timeline(text[match.end() :]).strip()
     material = f"---\n{stable_frontmatter}\n---\n{body}\n"
     return "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
 

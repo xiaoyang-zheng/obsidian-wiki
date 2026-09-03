@@ -37,6 +37,55 @@ A `.manifest.json` tracks every source that's been ingested — path, timestamps
 5. Agent updates `.manifest.json`, `index.md`, `log.md`, and `hot.md`
 6. Output is standard Obsidian-compatible markdown with frontmatter and `[[wikilinks]]`
 
+## Continuous source state
+
+Continuously polled sources have a second, runtime-only ledger outside the
+vault:
+
+```text
+<global config dir>/state/<vault-id>/source-state.json
+```
+
+Each adapter records an opaque `observed` cursor after source data is durably
+captured, an opaque `applied` cursor only after all required wiki artifacts are
+written, and an independent heartbeat. The core compares cursors only for
+equality: `observed != applied` is pending digest debt. A failed heartbeat does
+not advance either cursor or erase the last successful heartbeat.
+
+This state is separate from `.manifest.json`: the manifest records content
+provenance and hashes that reached the vault, while source state records
+high-frequency pull/apply progress and health. Provider-specific adapters
+(Slack, Lark, internal experiment systems, and similar integrations) remain
+separate packages; the core stores only generic IDs, opaque cursors, and health.
+
+## Maintenance backlog
+
+The deterministic backlog is a generated maintenance queue, not a semantic TODO
+list. It aggregates source-state debt, source bundle integrity, source/entity
+closure, project timeline drift, and manifest filesystem drift. A clean backlog
+means the machine-checkable maintenance surface is clear; it does not mean the
+wiki has no semantic gaps.
+
+The command is read-only unless `--write` is passed. When written, `_backlog.md`
+is a generated root file and is excluded from graph analysis, query indexes,
+trust review, project timelines, context packs, and normal page lint.
+
+## Immutable source bundles
+
+When durable evidence matters, capture a source explicitly in
+`_sources/<bundle-id>/`. A bundle contains a copied primary artifact under
+`raw/`, optional locally copied media under `media/`, and a `bundle.json`
+manifest recording SHA-256 hashes, byte sizes, provenance, and capture time.
+The artifacts are made read-only after capture; `source-bundles` verifies their
+hashes later. The manifest is deliberately provider-neutral and has no API
+credentials or adapter-specific state.
+
+Wiki pages opt in with `source_bundle: <bundle-id>`. Such pages must declare
+either `entities: [entities/<name>, ...]` or `entities: none`. Every declared
+entity needs a link from the source page and a backlink to the source page.
+This makes source-to-entity evidence navigable in both directions without
+forcing a migration of older pages.
+
 ## Code-aware project ingest
 
 `/wiki-update` adds a code-understanding step before distillation when the current project contains source code. Git answers **what changed**; `code-understand` answers **what that change touches**; the agent decides **what is worth remembering**; the vault stores only the distilled result.
@@ -115,6 +164,8 @@ $OBSIDIAN_VAULT_PATH/
 │   └── *.base              # Obsidian Bases dashboard definitions
 ├── _insights.md            # Graph analysis: hubs, bridges, dead ends
 ├── _raw/                   # Staging — drop rough notes, next ingest promotes them
+├── _sources/                # Immutable captured evidence bundles; excluded from the wiki graph
+├── _backlog.md              # Optional generated maintenance queue
 ├── _staging/               # Review queue when WIKI_STAGED_WRITES=true
 ├── _archives/              # Timestamped snapshots for rebuild/restore
 ├── _readouts/              # Narrative readouts from wiki-narrate
@@ -131,6 +182,36 @@ $OBSIDIAN_VAULT_PATH/
 Knowledge that's project-specific goes under `projects/`. Knowledge that's general goes in the global category directories. Both are cross-referenced with `[[wikilinks]]`.
 
 Every page carries required frontmatter: `title`, `category`, `tags`, `sources`, `created`, `updated`.
+
+### Project membership and timelines
+
+Project membership is explicit metadata, not a link inference:
+
+```yaml
+projects: [my-project]
+timeline_date: 2026-09-01
+timeline_blurb: Added a recoverable source ingestion protocol.
+```
+
+`projects:` is the recommended multi-project membership field. A body link to a
+project, a typed relationship, or a project-shaped tag is only a mention and
+does not make the page a project member. For compatibility, readers may accept
+legacy `project:` or infer membership from a `projects/<name>/...` path when no
+explicit field exists; new writes use `projects:`.
+
+`project-timelines` deterministically rebuilds the generated timeline in each
+project overview. It uses `timeline_date`, falling back to `created` but never
+to `updated`; the label falls back from `timeline_blurb` to `summary` to
+`title`. The renderer owns only the block between:
+
+```markdown
+<!-- BEGIN obsidian-wiki:auto-project-timeline -->
+<!-- END obsidian-wiki:auto-project-timeline -->
+```
+
+Human-authored content outside those markers remains untouched. Generated
+timeline links are navigation derived from membership, so graph analysis,
+exports, lint link counts, and trust fingerprints exclude that block.
 
 `hot.md` deserves a mention — it's a running semantic snapshot every write skill updates, so the next session picks up where the last one left off without crawling the whole vault.
 
@@ -183,6 +264,15 @@ The [original gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519
 - **Session brain.** A topic graph over your raw agent session history, so you can find the session where something happened. See [Session Brain](session-brain.md).
 
 - **Staged writes.** Set `WIKI_STAGED_WRITES=true` and LLM-written pages queue in `_staging/` for review before landing in the live vault.
+
+- **Recoverable continuous sources.** External adapters can record observed/applied cursors, heartbeat health, and derived debt without placing provider-specific state in the vault.
+
+- **Explicit project membership.** `projects:` distinguishes project evidence from a passing mention, while generated project timelines stay reproducible and separate from the semantic graph.
+
+These capabilities are opt-in and backward-compatible. Installing or upgrading
+obsidian-wiki does not migrate, move, or rewrite an existing vault
+automatically; run an explicit ingest, import, or timeline command when you
+want a vault change.
 
 ## Open Knowledge Format
 

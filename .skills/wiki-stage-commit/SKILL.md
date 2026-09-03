@@ -106,6 +106,10 @@ If `--list` flag is set, stop after printing the inventory (Step 1).
 2. Update `index.md` with the new page entry
 3. Remove the staged file
 
+Preserve `projects:`, `timeline_date`, and `timeline_blurb` exactly as reviewed.
+They are membership/timeline metadata; a project link in the body is only a
+mention.
+
 ### Accepting a patch/update
 
 1. Read the current page at the target path
@@ -136,6 +140,14 @@ After processing all staged files:
    ```
    - [TIMESTAMP] STAGE_COMMIT accepted=N rejected=M skipped=K
    ```
+3. If any accepted page changed project membership or timeline metadata, run
+   `obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH"` once after all
+   decisions. The renderer owns only its namespaced generated block; never
+   merge a staged patch directly into that block.
+4. If the staged batch belongs to a continuous source, advance its
+   `applied-cursor` only after every accepted page and required timeline/index
+   update succeeds. Rejected, skipped, conflicted, or partially applied batches
+   remain debt; stage promotion never guesses the adapter's cursor.
 
 ## Step 5: Report
 
