@@ -193,8 +193,10 @@ def _score(slug: str, entry: dict, terms: list[str]) -> float:
     tags_lower = [t.lower() for t in entry["tags"]]
     for term in terms:
         t = term.lower()
-        # Prefix word-boundary match: a short function word cannot hit inside
-        # an unrelated longer word. Prefix matching keeps inflected forms.
+        # Prefix word-boundary match: `\b{t}` rather than a bare substring, so
+        # a short function word ("ich", "den") can't hit inside an unrelated
+        # longer word ("tatsächlich", "Herausfinden"). Prefix (not `\bt\b`) is
+        # kept so inflected/plural forms ("Tags" vs "tag") still match.
         pattern = re.compile(rf"\b{re.escape(t)}")
         if t == slug or t == title_lower:
             score += 10.0
@@ -335,8 +337,12 @@ _STRUCTURAL = (
 # token means it can never match a title, tag or summary.
 _TERM_PUNCT = "?,.'\""
 
-# Function words dropped from direct fallback terms. Keep this multilingual so
-# common short words do not add retrieval noise in mixed-language questions.
+# Function words dropped from the "direct" fallback query terms. English is the
+# primary vault language, but German/French/Spanish words are common enough in
+# mixed-language questions that leaving them in feeds noise straight into
+# `_score()` (a short function word can prefix-match inside an unrelated
+# longer word). Not exhaustive — vault-language-aware stop words are future
+# work — just enough to cover the common short pronouns/articles/prepositions.
 _STOP_WORDS = {
     "what", "the", "a", "an", "is", "are", "how", "does", "do", "in", "of",
     "to", "for", "and", "or",
@@ -602,11 +608,13 @@ def query(
     top_candidate = candidates[0] if candidates else None
     index_only = False
     if top_candidate and top_candidate["score"] >= 10.0 and top_candidate["summary"]:
-        # A high absolute score alone is insufficient: on well-linked pages,
-        # graph-degree noise may cross the threshold. Require a clear lead.
+        # A high absolute score alone isn't enough evidence: on a well-linked
+        # page even noise terms can clear 10.0 via the degree bonus and tier
+        # weight. Require the top candidate to also clearly lead the runner-up
+        # — a real topical hit does; noise scores cluster together.
         runner_up = candidates[1]["score"] if len(candidates) > 1 else 0.0
         if runner_up == 0.0 or top_candidate["score"] >= 2 * runner_up:
-            index_only = True
+            index_only = True  # Exact title match with a summary — likely answerable from index
     if graph_answer is not None:
         index_only = True  # structural answers are complete without page reads
 

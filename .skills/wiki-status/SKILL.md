@@ -19,11 +19,8 @@ You are computing the current state of the wiki: what's been ingested, what's ne
 
 ## Before You Start
 
-**Writing profile:** Before drafting or rewriting natural-language Markdown,
-read and apply `Writing Profile Resolution` in `llm-wiki/SKILL.md`. Framework
-schema, provenance, safety, and operation-specific requirements take precedence.
-Apply preferences only to generated `_insights.md` prose; keep deterministic
-analysis snapshots verbatim.
+**Writing profile:** Before drafting or rewriting natural-language Markdown, read and apply the `Writing Profile Resolution` section in `llm-wiki/SKILL.md`. Framework schema, provenance, safety, and operation-specific requirements take precedence.
+Apply `WRITING.md` preferences only to generated `_insights.md` prose; keep deterministic analyser output and analysis snapshots verbatim.
 
 1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md` (inline `@name` override → walk up CWD for `.env` → global config → prompt setup). This gives `OBSIDIAN_VAULT_PATH`, `OBSIDIAN_SOURCES_DIR`, `CLAUDE_HISTORY_PATH`, and `CODEX_HISTORY_PATH`.
 2. Read `.manifest.json` at the vault root — this is the ingest tracking ledger
