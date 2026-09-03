@@ -650,18 +650,11 @@ Every skill's setup section should read:
 
 ## Writing Profile Resolution
 
-Before drafting or rewriting natural-language Markdown, resolve the global
-config directory with the XDG/legacy algorithm above, then read
-`<global config dir>/WRITING.md` when it exists. A missing or empty profile
-means there are no custom writing preferences. If the optional read fails, warn
-and continue with the default framework guidance.
+Before drafting or rewriting natural-language Markdown, resolve the global config directory with the XDG/legacy algorithm above, then read `<global config dir>/WRITING.md` when it exists. A missing or empty `WRITING.md` means there are no custom writing preferences. If that optional read fails, warn and continue with the default framework guidance.
 
-The precedence is framework invariants > current task/skill requirements >
-current project `AGENTS.md` > vault `AGENTS.md` > global `WRITING.md`.
-Framework invariants include schema, provenance, and safety. Writing preferences
-apply only to newly drafted or rewritten natural-language fields and bodies;
-they cannot alter YAML syntax, required keys, structure, types, source fidelity,
-JSON, or generated records.
+The effective precedence is framework invariants > current task/skill requirements > current project `AGENTS.md` > vault `AGENTS.md` > global `WRITING.md`. Framework invariants include schema, provenance, and safety; operation-specific requirements remain authoritative for the current task. Unspecified project and vault rules are inherited from less-specific layers, and more specific same-topic rules win.
+
+Writing preferences apply only to newly drafted or rewritten natural-language fields and body content. This includes natural-language title and summary values in YAML frontmatter, but preferences cannot alter YAML syntax, required keys, structure, types, or machine-generated fields. JSON, structured logs, and pass-through content remain unchanged and retain their required formats and source fidelity.
 
 ## Environment Variables
 
@@ -681,6 +674,9 @@ The wiki is configured through environment variables (see `.env.example`). The o
 - `WIKI_STAGED_WRITES` — When `true`, all LLM-written pages go to `_staging/<category>/` for human review before promotion. See `wiki-setup` and `wiki-stage-commit` for details.
 - `CODE_UNDERSTANDING_BACKEND` — how wiki-update understands a project before distilling: `auto` (CodeGraph when available, else builtin ast-extract + rg; default), `builtin`, or `codegraph` (explicitly require; warn/error if unavailable).
 - `CODE_UNDERSTANDING_CODEGRAPH_BIN` — optional path to the codegraph binary when it isn't on PATH.
+  Both code-understanding variables resolve like `OBSIDIAN_VAULT_PATH`: a real environment variable wins (empty counts as
+  unset), then the nearest `.env` walking up from the project directory, then the global config
+  (`$(obsidian_wiki_config_dir)/config`), then the default.
 - `OBSIDIAN_MAX_PAGES_PER_INGEST` — cap on pages created/updated per `wiki-ingest` run (default: `15`). See `wiki-ingest`, Step 4.
 - `LINT_SCHEDULE` — how often `daily-update` also runs `wiki-lint`: `daily` \| `weekly` (default) \| `manual`. See `daily-update`, Step 4a.
 

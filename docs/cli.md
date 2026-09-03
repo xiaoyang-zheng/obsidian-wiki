@@ -63,6 +63,26 @@ obsidian-wiki project-timelines /path/to/vault --link-format markdown
 
 Lint resolves its vault and schema together: explicit path (no config inheritance), positional `@name`, nearest CWD `.env`, then global config. CLI schema flags extend/replace that resolved vault's settings and are recorded in the JSON `schema` block.
 
+### Colliding page stems
+
+`duplicate_stems` reports two or more pages whose filename stems are equal after slugging —
+`concepts/vector-search.md` and `entities/vector-search.md` across folders, or `Vector Search.md`
+beside `vector-search.md` inside one. The graph
+identifies a page by its bare stem, so those pages are a single node in every graph metric:
+degree, communities, betweenness, and the `graph-analyse --around` blast radius. The check keys
+on the same slug and the same page selection `graph_analysis` uses, so what it reports is exactly
+what the graph will merge — root `index.md`/`log.md`/`hot.md`/`_insights.md` are excluded, and a
+legitimate `concepts/index.md` is not.
+
+It is independent of how any link is written: the collision is between the pages, not between
+references to them, so a vault where nothing links to the stem is still reported.
+
+`duplicate_titles` does not cover this — it keys on the `title:` value, and stems can collide
+while titles differ (`"Vector Search"` and `"vector-search"` slug to the same stem).
+
+The check warns. A vault carrying a collision moves from `pass` to `warn`, which leaves
+`obsidian-wiki lint` at exit 0 and takes `obsidian-wiki lint --strict` to exit 1.
+
 ### Lifecycle transition checking
 
 `illegal_lifecycle_transitions` compares each page's current `lifecycle` against the value recorded in `_meta/trust-ledger.json` at its last review, and flags moves the state machine forbids: any state falling back to `draft` (only ingest sets `draft`), and any exit from `archived` (a restore is a deliberate delete-and-recreate, not a transition).
@@ -284,7 +304,7 @@ Available for automation, scripting, and debugging. Skills call some of these in
 | `source-bundles [vault]` | Verify source bundle manifests and artifact hashes |
 | `project-timelines [vault] [--check]` | Check or rebuild generated project overview timeline blocks |
 | `ast-extract <path>` | Extract classes, functions, and imports from code — no LLM, no API calls |
-| `code-understand --project <dir> [--backend auto\|builtin\|codegraph] [--since <sha>] [--changed <file>...] [--max-symbols N] [--pretty]` | Emit a ranked code-understanding focus map (symbols + file:line citations) for a project; CodeGraph when available, built-in AST + rg otherwise. Used by wiki-update Step 3b. |
+| `code-understand --project <dir> [--backend auto\|builtin\|codegraph] [--since <sha>] [--changed <file>...] [--max-symbols N] [--pretty]` | Emit a ranked code-understanding focus map (symbols + file:line citations) for a project; CodeGraph when available, built-in AST + rg otherwise. `--backend` beats the resolved `CODE_UNDERSTANDING_*` config (env → project `.env` → global config). Used by wiki-update Step 3b. |
 
 ```bash
 obsidian-wiki graph-query /path/to/vault "transformer architecture" --pretty
