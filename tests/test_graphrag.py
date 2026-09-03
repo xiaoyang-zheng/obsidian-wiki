@@ -16,6 +16,7 @@ from obsidian_wiki.graphrag import (
     query,
     rank_candidates,
 )
+from obsidian_wiki.projects import TIMELINE_BEGIN, TIMELINE_END
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +99,25 @@ class TestBuildIndex:
     def test_in_links_reverse(self, simple_vault):
         idx = build_index(simple_vault)
         assert "transformer" in idx["attention"]["in_links"]
+
+    def test_generated_project_timeline_links_are_excluded(self, vault):
+        page = _page(vault, "project", links=["manual"])
+        _page(vault, "manual")
+        _page(vault, "generated-wiki")
+        _page(vault, "generated-markdown")
+        generated = (
+            f"{TIMELINE_BEGIN}\n"
+            "[[generated-wiki]]\n"
+            "[Generated](generated-markdown.md)\n"
+            f"{TIMELINE_END}"
+        )
+        page.write_text(page.read_text() + generated + "\n")
+
+        idx = build_index(vault)
+
+        assert idx["project"]["out_links"] == ["manual"]
+        assert idx["generated-wiki"]["in_links"] == []
+        assert idx["generated-markdown"]["in_links"] == []
 
     def test_empty_vault(self, vault):
         idx = build_index(vault)
@@ -299,6 +319,17 @@ class TestQuery:
     def test_json_serialisable(self, simple_vault):
         result = query(simple_vault, "deep learning")
         json.dumps(result)
+
+    def test_non_english_question_about_absent_topic_returns_no_candidates(self, simple_vault):
+        # Short German function words must not match inside unrelated words.
+        result = query(simple_vault, "Was weiß ich über Kubernetes?")
+        assert result["candidates"] == []
+        assert result["index_only"] is False
+
+    def test_mid_word_substring_does_not_match_title(self, simple_vault):
+        idx = build_index(simple_vault)
+        result = rank_candidates(idx, ["bed"])
+        assert result == []
 
 
 # ---------------------------------------------------------------------------

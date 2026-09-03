@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from obsidian_wiki.lint import lint_vault
+from obsidian_wiki.projects import TIMELINE_BEGIN, TIMELINE_END
 from obsidian_wiki.trust import build_trust_ledger, write_trust_ledger
 
 
@@ -112,6 +113,72 @@ def test_lint_vault_fails_on_broken_links_and_missing_frontmatter(tmp_path: Path
     assert report["status"] == "fail"
     assert report["findings"]["broken_links"] == [{"page": "concepts/alpha.md", "target": "ghost"}]
     assert any(item["page"] == "concepts/beta.md" for item in report["findings"]["missing_frontmatter"])
+
+
+def test_lint_ignores_links_in_generated_project_timeline(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    page = _page(vault, "projects/demo.md", links=["manual-target"])
+    _page(vault, "concepts/manual-target.md", links=["demo"])
+    generated = (
+        f"{TIMELINE_BEGIN}\n"
+        "[[missing-generated-target]]\n"
+        "[missing markdown target](missing-generated-markdown.md)\n"
+        f"{TIMELINE_END}"
+    )
+    page.write_text(page.read_text() + generated + "\n", encoding="utf-8")
+
+    report = lint_vault(vault, require_trust_ledger=False)
+
+    assert report["findings"]["broken_links"] == []
+    assert report["stats"]["link_count"] == 2
+
+
+def test_lint_reports_project_membership_and_timeline_drift(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    _page(vault, "projects/alpha.md", links=["event"])
+    event = _page(vault, "references/event.md", links=["alpha"])
+    event.write_text(
+        event.read_text().replace(
+            "---\n# event",
+            "projects: [alpha]\ntimeline_date: 2026-09-01\n"
+            "timeline_blurb: Project milestone.\n---\n# event",
+        ),
+        encoding="utf-8",
+    )
+
+    report = lint_vault(vault, require_trust_ledger=False)
+
+    assert report["status"] == "warn"
+    assert report["findings"]["project_timeline_drift"] == [
+        {"page": "projects/alpha.md"}
+    ]
+    assert report["findings"]["missing_project_targets"] == []
+
+
+def test_lint_fails_for_missing_and_conflicting_project_membership(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    _page(vault, "projects/alpha.md")
+    event = _page(vault, "references/event.md")
+    event.write_text(
+        event.read_text().replace(
+            "---\n# event",
+            "projects: [missing]\nproject: alpha\n"
+            "timeline_date: 2026-09-01\n---\n# event",
+        ),
+        encoding="utf-8",
+    )
+
+    report = lint_vault(vault, require_trust_ledger=False)
+
+    assert report["status"] == "fail"
+    assert report["findings"]["missing_project_targets"]
+    assert report["findings"]["conflicting_project_membership"] == [
+        {
+            "page": "references/event.md",
+            "projects": ["missing"],
+            "legacy_project": "alpha",
+        }
+    ]
 
 
 def test_lint_vault_warns_on_duplicates_missing_summaries_and_orphans(tmp_path: Path) -> None:

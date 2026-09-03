@@ -10,6 +10,16 @@ import pytest
 import obsidian_wiki.cli as cli
 
 
+def test_scaffold_index_includes_projects_section(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+
+    cli.scaffold_vault(vault)
+
+    index = (vault / "index.md").read_text(encoding="utf-8")
+    assert "## Projects\n" in index
+    assert index.index("## Projects") < index.index("## Concepts")
+
+
 def test_configure_console_output_replaces_unencodable_status_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

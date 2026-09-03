@@ -45,13 +45,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from obsidian_wiki.projects import strip_generated_project_timeline
+
 
 # ---------------------------------------------------------------------------
 # Wikilink / frontmatter parsing
 # ---------------------------------------------------------------------------
 
-_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:[|#][^\]]*?)?\]\]")
-_MD_LINK_RE = re.compile(r"\[.*?\]\(([^)]+\.md[^)]*)\)")
+_WIKILINK_RE = re.compile(r"(?<!!)\[\[([^\]|#]+?)(?:[|#][^\]]*?)?\]\]")
+_MD_LINK_RE = re.compile(r"(?<!!)\[.*?\]\(([^)]+\.md[^)]*)\)")
 _TAGS_RE = re.compile(r"^tags:\s*\[([^\]]+)\]", re.MULTILINE)
 _TAGS_LIST_RE = re.compile(r"^tags:\s*\n((?:\s+-\s+\S+\n)+)", re.MULTILINE)
 
@@ -71,7 +73,7 @@ def _page_slug(path: Path, root: Path) -> str:
 
 #: Directories that hold staging / archive / config material, not knowledge.
 SKIP_DIRS = frozenset({
-    "_raw", "_archived", "_staging", "_archives", "_meta", "_readouts", ".obsidian",
+    "_raw", "_sources", "_archived", "_staging", "_archives", "_meta", "_readouts", ".obsidian",
 })
 
 #: Vault bookkeeping files at the vault ROOT. They link to (almost) every page,
@@ -79,7 +81,7 @@ SKIP_DIRS = frozenset({
 #: table of contents outrank real knowledge in every degree/centrality ranking.
 #: Only the root-level files are skipped — a legitimate `concepts/index.md`
 #: is still a normal page.
-SKIP_ROOT_FILES = frozenset({"index", "log", "hot", "_insights"})
+SKIP_ROOT_FILES = frozenset({"index", "log", "hot", "_insights", "_backlog"})
 
 
 def is_wiki_page(path: Path, vault: Path) -> bool:
@@ -119,6 +121,7 @@ def parse_vault_graph(vault: Path) -> tuple[dict[str, list[str]], dict[str, list
             text = page.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        material_text = strip_generated_project_timeline(text)
 
         # Tags
         m = _TAGS_RE.search(text)
@@ -130,13 +133,13 @@ def parse_vault_graph(vault: Path) -> tuple[dict[str, list[str]], dict[str, list
                 tags_map[src] = [ln.strip().lstrip("- ") for ln in m2.group(1).splitlines() if ln.strip()]
 
         # Wikilinks
-        for link in _WIKILINK_RE.findall(text):
+        for link in _WIKILINK_RE.findall(material_text):
             target = _slug(link.split("/")[-1])
             if target and target != src and target in known_slugs:
                 outgoing[src].append(target)
 
         # Markdown links (when OBSIDIAN_LINK_FORMAT=markdown)
-        for href in _MD_LINK_RE.findall(text):
+        for href in _MD_LINK_RE.findall(material_text):
             target = _slug(Path(href).stem)
             if target and target != src and target in known_slugs:
                 outgoing[src].append(target)

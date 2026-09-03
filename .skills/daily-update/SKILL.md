@@ -36,6 +36,17 @@ Compare each source in `.manifest.json` against its file's modification time. Cl
 - **Stale** — `mtime > ingested_at` (new content exists, not yet ingested)
 - **Missing** — source file no longer exists
 
+Also run:
+
+```bash
+obsidian-wiki source-state "$OBSIDIAN_VAULT_PATH"
+```
+
+when continuous-source state exists. Report observed/applied debt and heartbeat
+health separately from manifest freshness. This maintenance skill never advances
+cursors; only the adapter that durably observed data or successfully applied
+all required artifacts may do that.
+
 **Step 2: Index refresh**
 
 Read `$OBSIDIAN_VAULT_PATH/index.md`. If any pages in the vault are missing from the index (or vice versa), update the index. Use `find $OBSIDIAN_VAULT_PATH -name "*.md" -not -path "*/_*"` to enumerate vault pages, then reconcile against the index.
@@ -43,6 +54,30 @@ Read `$OBSIDIAN_VAULT_PATH/index.md`. If any pages in the vault are missing from
 **Step 3: hot.md update**
 
 Read `hot.md`. If it's >48h old based on its `updated:` frontmatter, regenerate it: read the 10 most recently modified wiki pages and write a fresh ~500-word semantic snapshot of what the wiki covers. This keeps the next session's context warm without a full vault crawl.
+
+**Step 3a: Project timeline check**
+
+Run the read-only deterministic check:
+
+```bash
+obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH" --check
+```
+
+Report drift or malformed markers. Do not rebuild timelines in a background
+maintenance pass unless the user explicitly requested writes; generated blocks
+may reference newly staged or partially applied work.
+
+**Step 3b: Deterministic backlog check**
+
+Run:
+
+```bash
+obsidian-wiki backlog "$OBSIDIAN_VAULT_PATH" --json --pretty
+```
+
+Report critical, needs-ingest, and maintenance counts. Do not write
+`_backlog.md` during a background daily run unless the user explicitly asked for
+a generated backlog file.
 
 **Step 4: Write state**
 
@@ -110,8 +145,10 @@ Append to `$OBSIDIAN_VAULT_PATH/log.md`:
 ## Daily Wiki Update
 
 - Sources: N fresh · N stale · N missing
+- Continuous sources: N healthy · N debt · N stale · N errors (omit when unconfigured)
 - Index: N pages (N added, N removed)
 - hot.md: refreshed / up to date
+- Project timelines: clean / N need rebuild / error
 - Health check: N broken links, N orphans, N stale pages (omit this line if lint didn't run this cycle)
 
 Stale sources (run to sync):
@@ -186,6 +223,10 @@ Tell the user:
 - State is stored in `<global config dir>/state/<vault-id>/` (XDG-style `~/.config/obsidian-wiki` by default, or the legacy `~/.obsidian-wiki` if that already exists) — supports multiple vaults independently
 - They can run `/daily-update` anytime to force a sync
 - Logs go to `/tmp/obsidian-wiki-daily.log`
+
+The generic scheduler does not install or embed provider-specific adapters.
+Keep private chat, document, experiment, and internal-platform connectors in
+separate packages. Setup and upgrades do not migrate existing vaults.
 
 ## QMD Refresh After Vault Writes
 

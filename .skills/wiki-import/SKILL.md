@@ -19,8 +19,18 @@ Either way, the import writes pages with correct frontmatter and wikilinks, then
 
 ## Before You Start
 
+**Writing profile:** Before drafting or rewriting natural-language Markdown,
+read and apply `Writing Profile Resolution` in `llm-wiki/SKILL.md`. Framework
+schema, provenance, safety, and operation-specific requirements take precedence.
+Preserve imported source prose; apply preferences only to generated text.
+
 1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md` (inline `@name` override → walk up CWD for `.env` → global config → prompt setup). This gives `OBSIDIAN_VAULT_PATH`.
 2. Read `$OBSIDIAN_VAULT_PATH/AGENTS.md` if it exists — apply any owner-specific conventions.
+
+When imported material needs a durable local original or attachment set, create
+an explicit source bundle before writing derived pages. Preserve the imported
+file under `_sources/<id>/raw/` and localize selected media under `media/`; do
+not turn a remote attachment URL into the long-term source of truth.
 
 ## Step 1: Locate and Detect Source Type
 
@@ -177,7 +187,7 @@ Walk the bundle directory tree. For each `.md` file that is **not** a reserved f
    - `updated` ← `timestamp` (or now if absent).
    - `created` ← the preserved `created` extension key if present, else now.
    - `sources` ← the preserved `sources` extension key if present; else `["imported from OKF bundle <bundle path>"]`. If a `resource` URL is present and not already in `sources`, add it.
-   - Carry through any other preserved extension keys verbatim (`relationships`, `lifecycle`, `tier`, `base_confidence`, …). These make the round-trip lossless.
+   - Carry through any other preserved extension keys verbatim (`projects`, `timeline_date`, `timeline_blurb`, `relationships`, `lifecycle`, `tier`, `base_confidence`, …). These make the round-trip lossless.
 4. **Reverse-transform body links** — markdown links that point at `.md` paths become wikilinks (this restores both real cross-links and forward-references the exporter preserved per `wiki-export` Step 3.5):
    - `[text](../concepts/transformers.md)` or `[text](/concepts/transformers.md)` → resolve the path (relative to this file's dir, or bundle-root for `/`-absolute) to a concept id → `[[concepts/transformers]]`, or `[[concepts/transformers|text]]` when `text` differs from the target's title. The target's title comes from the bundle page when it exists; otherwise compare against the last path segment.
    - Treat the markdown target as a **file path first**: normalize the `.md` path relative to the current file, then strip the trailing `.md` from the resolved file path to recover the page id. Do not try to infer the id from directory traversal segments before resolving the full file path. This preserves round-trips for folder-note layouts like `projects/social-twitter.md` plus `projects/social-twitter/...`, where `../../social-twitter.md` must restore to `projects/social-twitter`.
@@ -185,7 +195,7 @@ Walk the bundle directory tree. For each `.md` file that is **not** a reserved f
    - When `OBSIDIAN_LINK_FORMAT=markdown` is set in config, **keep** markdown links (just rewrite the path to be vault-relative); do not convert to wikilinks.
    - Leave external `http(s)://` links and `# Citations` sections untouched.
 5. **Write the page** using the conflict mode from Step 2:
-   - **merge + exists** → reverse-map frontmatter and merge it into the existing page (union `tags`; fill `summary`/`sources` only if missing; union `relationships`; refresh `updated`). For the body, OKF carries a real body: replace the existing body with the bundle body **only if the existing page is a stub** (body is just a heading + `## Related`); otherwise keep the existing body and append any bundle `# Citations` / new `##` sections not already present. Increment `merged`.
+   - **merge + exists** → reverse-map frontmatter and merge it into the existing page (union `tags` and `projects`; fill `summary`/`sources`/`timeline_date`/`timeline_blurb` only if missing; union `relationships`; refresh `updated`). A project mention in the body or tags never creates membership. For the body, OKF carries a real body: replace the existing body with the bundle body **only if the existing page is a stub** (body is just a heading + `## Related`); otherwise keep the existing body and append any bundle `# Citations` / new `##` sections not already present. Increment `merged`.
    - **merge + doesn't exist** → write the full page (frontmatter + full bundle body). Increment `created`.
    - **skip + exists** → increment `skipped`, continue.
    - **skip + doesn't exist** → write the full page. Increment `created`.
@@ -194,6 +204,11 @@ Walk the bundle directory tree. For each `.md` file that is **not** a reserved f
 6. Ensure the parent directory (`$VAULT/concepts/`, etc.) exists before writing.
 
 Unlike the graph.json path, **do not** generate a `## Related` stub section — the bundle body already contains the real cross-links.
+
+Do not trust or preserve a foreign generated project-timeline block as local
+authority. Membership metadata is portable; the local deterministic renderer
+owns generated blocks. Remove an imported namespaced block before writing and
+rebuild it from the imported `projects:` metadata in Step 5.
 
 ## Step 5: Update Vault Metadata
 
@@ -251,6 +266,19 @@ Rewrite the **Recent Activity** section to include this import as the latest ent
 ```
 Update the `updated:` frontmatter timestamp. Leave other hot.md sections (Active Threads, Key Takeaways) intact unless they reference pages that were just created — in which case add brief mentions.
 
+### Project timelines
+
+If created or merged pages changed `projects:`, `timeline_date`,
+`timeline_blurb`, `created`, `summary`, or title, run:
+
+```bash
+obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH"
+```
+
+Do this once after all page writes succeed. The renderer owns only its
+namespaced generated block. A `graph.json` import is lossy and does not promise
+project membership; OKF preserves the extension fields.
+
 ## Step 6: Print Summary
 
 ```
@@ -271,3 +299,4 @@ Only show the `Skipped` line if `skip` mode was explicitly requested. If `overwr
 - **Directory creation**: Always create missing category directories before writing pages.
 - **Broken wikilinks**: Since pages are being created together from the same export, most links will resolve. Any node referenced in `links` but absent from `nodes` (broken in the original export) will still appear as a wikilink — it just won't have a corresponding page file, which is valid.
 - **Filtered exports**: If the source `graph.json` was produced with visibility filtering (noted in `graph.metadata`), imported pages will only reflect the filtered set. Note this in the summary if `graph.graph` contains a `filtered` key.
+- **No automatic vault migration**: importing is an explicit content operation. Installing or upgrading the skill does not move or rewrite an existing vault.

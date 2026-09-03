@@ -19,6 +19,7 @@ from obsidian_wiki.graph_analysis import (
     parse_vault_graph,
     surprising_connections,
 )
+from obsidian_wiki.projects import TIMELINE_BEGIN, TIMELINE_END
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +93,23 @@ class TestParseVaultGraph:
         _page(vault, "orphan", ["doesnotexist"])
         outgoing, _ = parse_vault_graph(vault)
         assert outgoing["orphan"] == []
+
+    def test_generated_project_timeline_links_are_excluded(self, vault):
+        page = _page(vault, "project", ["manual"])
+        _page(vault, "manual", [])
+        _page(vault, "generated-wiki", [])
+        _page(vault, "generated-markdown", [])
+        generated = (
+            f"{TIMELINE_BEGIN}\n"
+            "[[generated-wiki]]\n"
+            "[Generated](generated-markdown.md)\n"
+            f"{TIMELINE_END}"
+        )
+        page.write_text(page.read_text() + generated + "\n")
+
+        outgoing, _ = parse_vault_graph(vault)
+
+        assert outgoing["project"] == ["manual"]
 
 
 # ---------------------------------------------------------------------------

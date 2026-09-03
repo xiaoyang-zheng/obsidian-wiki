@@ -25,12 +25,16 @@ You are exporting the wiki's wikilink graph to structured formats so it can be u
 If the user's invocation includes a project name — e.g. `/wiki-export prismor`, `"export the prismor project"`, `"export project:security"` — activate **project filter mode**:
 
 1. **Extract the project name** from the argument or phrase. Normalise: lowercase, strip the word "project".
-2. Keep only pages where **either** condition holds:
-   - The page `id` starts with `projects/<name>/` (path-based match)
-   - The page's `tags` array contains `<name>` (tag-based match)
-3. Drop any edge where either endpoint was excluded.
-4. Note the filter in the summary: `(filtered: project:<name> — X of Y pages)`
-5. Set `graph.graph.filter = "project:<name>"` in the JSON output.
+2. Resolve effective membership using the project contract from
+   `llm-wiki/SKILL.md`: explicit `projects:` first, legacy singular `project:`
+   second, and `projects/<name>/...` path inference only when neither field is
+   present. Keep the project overview itself.
+3. Do not include a page merely because its body links to the project, a typed
+   relationship names it, or a tag matches it. Those are mentions, not
+   membership.
+4. Drop any edge where either endpoint was excluded.
+5. Note the filter in the summary: `(filtered: project:<name> — X of Y pages)`
+6. Set `graph.graph.filter = "project:<name>"` in the JSON output.
 
 If both a project filter and a visibility filter are active, apply both (project filter first, then visibility filter on the remaining set).
 
@@ -61,6 +65,10 @@ For each page, extract from frontmatter:
 This is your **node list**.
 
 For each page, Grep the body for `\[\[.*?\]\]` to extract all wikilinks:
+- First remove the complete generated block between
+  `<!-- BEGIN obsidian-wiki:auto-project-timeline -->` and its matching END
+  marker. Timeline links are derived navigation and must not become graph
+  edges. If markers are malformed, stop and report the page.
 - Parse each `[[target]]` or `[[target|display]]` — use the target part only
 - Resolve the target to a node id (normalize: lowercase, spaces→hyphens, strip `.md`)
 - Skip links that point outside the node list (broken links)
@@ -380,7 +388,7 @@ This table is the single source of truth for the mapping; `wiki-import` referenc
 | `tags`        | `tags`                  | `tags`                   | Verbatim list. `visibility/*` system tags pass through unchanged. |
 | `timestamp`   | `updated`               | `updated`                | ISO 8601 both sides. |
 | `resource`    | first `sources:` entry **iff** it is an `http(s)://` URL | — | Optional; omit when no source URL. Most pages describe abstract knowledge and have none. |
-| *(extensions)* | `category`, `sources`, `created`, `relationships`, `lifecycle`, `tier`, `base_confidence`, … | preserved verbatim | OKF §4.1 permits arbitrary keys and requires consumers to preserve them. **Writing our native keys as OKF extension frontmatter is what makes the round-trip lossless** — on import, preserved `category`/`created`/`sources` are preferred over re-deriving from `type`. |
+| *(extensions)* | `category`, `sources`, `created`, `projects`, `timeline_date`, `timeline_blurb`, `relationships`, `lifecycle`, `tier`, `base_confidence`, … | preserved verbatim | OKF §4.1 permits arbitrary keys and requires consumers to preserve them. **Writing our native keys as OKF extension frontmatter is what makes the round-trip lossless** — on import, preserved `category`/`created`/`sources` are preferred over re-deriving from `type`. |
 
 ### Steps
 
@@ -440,6 +448,7 @@ Only include lines for filters that were actually applied.
 
 - **Re-running is safe** — all output files (and the `okf/` bundle) are overwritten on each run
 - **Broken wikilinks are skipped** — only edges to pages that exist in the vault are exported; in the OKF bundle, a wikilink to a missing/filtered page degrades to plain text
+- **Generated timelines are not graph evidence** — preserve their page bodies in OKF, but exclude links inside the generated block from graph edges and project membership
 - **OKF is the lossless format** — `graph.json` reconstructs only stubs on import, while the `okf/` bundle preserves full page bodies. Use OKF for vault-to-vault transfer and external markdown tools (MkDocs, Notion, GitHub); use the graph files for analysis tools (Gephi, Neo4j)
 - **The `wiki-export/` directory should be gitignored** if the vault is version-controlled — these are derived artifacts
 - **`graph.json` is the primary format** — the others are derived from it. If a future tool supports graph queries natively, point it at `graph.json`

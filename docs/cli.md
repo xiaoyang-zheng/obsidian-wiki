@@ -39,6 +39,8 @@ Commands other than `setup`, `info`, and `doctor` warn you when the install has 
 |---|---|
 | `query <question>` | Answer a question from the configured vault's index |
 | `lint [vault]` | Find missing frontmatter, broken links, duplicates, and orphans |
+| `backlog [vault]` | Aggregate deterministic maintenance debt across source state, bundles, manifest, and project timelines |
+| `project-timelines [vault]` | Check or rebuild generated project timelines from explicit membership metadata |
 
 ```bash
 obsidian-wiki query "what do I know about MCP security?"
@@ -50,6 +52,13 @@ obsidian-wiki lint @research --json    # uses <config dir>/config.research only
 obsidian-wiki lint --strict-trust      # fail on trust-ledger problems, not just warn
 obsidian-wiki lint --allow-lifecycle active --allow-relationship-type synthesizes \
   --required-trust-field updated --schema-source /path/to/vault/AGENTS.md
+
+obsidian-wiki backlog /path/to/vault --json --pretty
+obsidian-wiki backlog /path/to/vault --write
+
+obsidian-wiki project-timelines                 # rebuild changed generated blocks
+obsidian-wiki project-timelines @research --check
+obsidian-wiki project-timelines /path/to/vault --link-format markdown
 ```
 
 Lint resolves its vault and schema together: explicit path (no config inheritance), positional `@name`, nearest CWD `.env`, then global config. CLI schema flags extend/replace that resolved vault's settings and are recorded in the JSON `schema` block.
@@ -61,6 +70,106 @@ Lint resolves its vault and schema together: explicit path (no config inheritanc
 `draft → verified` is deliberately **not** flagged — ledger snapshots are sparse, so a legitimate intermediate `reviewed` may have happened between two reviews.
 
 The check warns by default and fails only under `--strict-trust`. Pages whose ledger entry predates the `lifecycle` field carry no baseline and are skipped silently, so existing vaults behave exactly as before until their next `trust-record`.
+
+### Maintenance backlog
+
+`backlog` is a deterministic queue of vault maintenance debt. It does not
+perform semantic review and does not run provider-specific adapters. It combines
+existing machine-checkable signals:
+
+- source-state debt, stale heartbeats, and adapter errors
+- source bundle hash or artifact failures
+- source page to entity closure failures
+- project timeline drift and marker/schema errors
+- manifest filesystem sources that are missing or whose content hash changed
+
+By default the command is read-only. With `--write`, it atomically writes a
+generated root `_backlog.md`. That file is excluded from the normal graph,
+trust, project timeline, lint page scan, and context-pack surfaces.
+
+### Project timelines
+
+`projects: [name]` declares membership; merely linking to, tagging, or naming a
+project is a mention and does not add a timeline entry. `timeline_date` falls
+back to `created` (never `updated`), and `timeline_blurb` falls back to
+`summary`, then `title`.
+
+`project-timelines` edits only the namespaced generated block in each project
+overview. `--check` is read-only and exits non-zero for drift or structural
+errors. Existing vaults are not migrated or rewritten automatically.
+
+## Source bundles and localized media
+
+| Command | What it does |
+|---|---|
+| `source-bundle-create [vault] --id ID --source FILE` | Capture a local primary artifact and optional local media into a new immutable bundle |
+| `source-bundle-media [vault] --id ID --media FILE` | Copy one additional local media artifact into an existing bundle |
+| `source-bundles [vault]` | Verify bundle manifests and SHA-256 hashes of every captured artifact |
+
+```bash
+obsidian-wiki source-bundle-create /path/to/vault --id attention-paper \
+  --source ~/Papers/attention.pdf --source-type paper \
+  --original-uri https://arxiv.org/abs/1706.03762 \
+  --media ~/Papers/attention-figure-1.png
+
+obsidian-wiki source-bundle-media /path/to/vault \
+  --id attention-paper --media ~/Desktop/results-chart.png --name results.png
+
+obsidian-wiki source-bundles /path/to/vault --id attention-paper --pretty
+```
+
+Bundles are stored as `_sources/<id>/raw/`, `_sources/<id>/media/`, and
+`bundle.json`. The primary source and every media artifact are locally copied,
+made read-only, and recorded with a hash and byte size. The command never
+fetches remote media. `_sources/` is evidence storage, not wiki content: graph,
+trust, context-pack, project timelines, and normal link lint exclude it.
+
+To connect a page to durable evidence, opt in explicitly:
+
+```yaml
+source_bundle: attention-paper
+entities: [entities/attention]
+```
+
+The page must link to every declared entity and each entity page must link back
+to the source page. Use `entities: none` only when the source genuinely has no
+entity to attach. These failures, missing bundles, and hash mismatches are hard
+`lint` failures; pages without `source_bundle:` remain compatible.
+
+## Continuous source state
+
+| Command | What it does |
+|---|---|
+| `source-state [vault]` | Report observed/applied cursors, derived debt, and heartbeat health |
+| `source-state-update [vault] --source ID` | Atomically update one source's cursor or heartbeat state |
+
+```bash
+# Pull succeeded: raw data through this opaque cursor is durable.
+obsidian-wiki source-state-update /path/to/vault --source public-feed \
+  --observed-cursor 'page:115/etag:a' --cursor-kind opaque --heartbeat-ok
+
+# Apply only after every required wiki artifact was written successfully.
+obsidian-wiki source-state-update /path/to/vault --source public-feed \
+  --applied-cursor 'page:115/etag:a'
+
+# A failed poll records health but moves neither cursor.
+obsidian-wiki source-state-update /path/to/vault --source public-feed \
+  --heartbeat-error 'temporary upstream failure'
+
+obsidian-wiki source-state --pretty
+obsidian-wiki source-state /path/to/vault --source public-feed --strict
+```
+
+Cursors are opaque strings and are compared only for equality. An observed
+cursor without the same applied cursor is debt. Heartbeats track attempts,
+successful checks, errors, and optional staleness independently; a failure
+does not erase the last success.
+
+State lives outside the vault at
+`<global config dir>/state/<vault-id>/source-state.json`, is lock-protected and
+atomically replaced, and does not change `.manifest.json`. The manifest records
+ingested content/provenance; source state records high-frequency pull/apply
+progress. Provider-specific adapters remain separate from this generic CLI.
 
 ## Context packs
 
@@ -167,6 +276,13 @@ Available for automation, scripting, and debugging. Skills call some of these in
 | `cache-check <vault> <sources...>` | Which sources are new / modified / unchanged vs. `.manifest.json` |
 | `cache-update <vault> <source>` | Record a source's SHA-256 in `.manifest.json` after ingest |
 | `cache-hash <path>` | Compute a file or directory hash (no manifest I/O) |
+| `source-state [vault]` | Read external, vault-scoped continuous-source health and debt |
+| `source-state-update [vault] --source ID ...` | Lock, merge, and atomically write one source-state entry |
+| `backlog [vault] [--write]` | Aggregate deterministic maintenance debt and optionally write `_backlog.md` |
+| `source-bundle-create [vault] --id ID --source FILE` | Capture immutable local source evidence under `_sources/<id>/` |
+| `source-bundle-media [vault] --id ID --media FILE` | Add local media to an existing source bundle |
+| `source-bundles [vault]` | Verify source bundle manifests and artifact hashes |
+| `project-timelines [vault] [--check]` | Check or rebuild generated project overview timeline blocks |
 | `ast-extract <path>` | Extract classes, functions, and imports from code — no LLM, no API calls |
 | `code-understand --project <dir> [--backend auto\|builtin\|codegraph] [--since <sha>] [--changed <file>...] [--max-symbols N] [--pretty]` | Emit a ranked code-understanding focus map (symbols + file:line citations) for a project; CodeGraph when available, built-in AST + rg otherwise. Used by wiki-update Step 3b. |
 
@@ -182,6 +298,7 @@ obsidian-wiki graph-analyse /path/to/vault --around attention --depth 2 --direct
 obsidian-wiki batch-plan /path/to/vault ~/research --max-mb 4 --max-files 30
 obsidian-wiki cache-check /path/to/vault ~/research/*.pdf
 obsidian-wiki cache-update /path/to/vault ~/research/paper.pdf --pages concepts/attention.md
+obsidian-wiki backlog /path/to/vault --json --pretty
 obsidian-wiki ast-extract ./src --pretty
 obsidian-wiki code-understand --project . --since <last_commit_synced> --pretty
 ```

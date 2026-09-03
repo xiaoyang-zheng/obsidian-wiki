@@ -442,6 +442,7 @@ def scaffold_vault(vault_path: Path) -> bool:
             "---\n\n"
             "# Wiki Index\n\n"
             f"*This index is automatically maintained. Last updated: {timestamp}*\n\n"
+            "## Projects\n\n"
             "## Concepts\n\n"
             "*No pages yet. Use `wiki-ingest` to add your first source.*\n\n"
             "## Entities\n\n"
@@ -1259,6 +1260,125 @@ def cmd_cache_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_source_state(args: argparse.Namespace) -> int:
+    from obsidian_wiki.source_state import build_report
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    try:
+        report = build_report(vault, source_ids=args.source)
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2 if args.pretty else None))
+    if args.strict and report["status"] != "pass":
+        return 1
+    return 0
+
+
+def cmd_source_state_update(args: argparse.Namespace) -> int:
+    from obsidian_wiki.source_state import update_source
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    requested = (
+        args.observed_cursor is not None
+        or args.applied_cursor is not None
+        or args.cursor_kind is not None
+        or args.heartbeat_ok
+        or args.heartbeat_error is not None
+        or args.stale_after_seconds is not None
+    )
+    if not requested:
+        print("error: no source-state update requested", file=sys.stderr)
+        return 1
+    kwargs: dict[str, object] = {}
+    if args.observed_cursor is not None:
+        kwargs["observed_cursor"] = args.observed_cursor
+    if args.applied_cursor is not None:
+        kwargs["applied_cursor"] = args.applied_cursor
+    if args.cursor_kind is not None:
+        kwargs["cursor_kind"] = args.cursor_kind
+    if args.heartbeat_ok:
+        kwargs["heartbeat_status"] = "ok"
+    elif args.heartbeat_error is not None:
+        kwargs["heartbeat_status"] = "error"
+        kwargs["heartbeat_error"] = args.heartbeat_error
+    if args.stale_after_seconds is not None:
+        kwargs["stale_after_seconds"] = args.stale_after_seconds
+    try:
+        result = update_source(vault, args.source, **kwargs)
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2 if args.pretty else None))
+    return 0
+
+
+def cmd_source_bundle_create(args: argparse.Namespace) -> int:
+    from obsidian_wiki.source_bundles import SourceBundleError, create_source_bundle
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    try:
+        result = create_source_bundle(
+            vault,
+            args.bundle_id,
+            Path(args.source),
+            source_type=args.source_type,
+            original_uri=args.original_uri,
+            media_paths=[Path(path) for path in args.media],
+        )
+    except (OSError, SourceBundleError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2 if args.pretty else None))
+    return 0
+
+
+def cmd_source_bundle_media(args: argparse.Namespace) -> int:
+    from obsidian_wiki.source_bundles import SourceBundleError, localize_bundle_media
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    try:
+        result = localize_bundle_media(
+            vault,
+            args.bundle_id,
+            Path(args.media),
+            name=args.name,
+        )
+    except (OSError, SourceBundleError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2 if args.pretty else None))
+    return 0
+
+
+def cmd_source_bundles(args: argparse.Namespace) -> int:
+    from obsidian_wiki.source_bundles import SourceBundleError, check_source_bundles
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    try:
+        report = check_source_bundles(vault, bundle_ids=args.bundle_id)
+    except (OSError, SourceBundleError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2 if args.pretty else None))
+    return 1 if report["status"] == "fail" else 0
+
+
 def cmd_cache_update(args: argparse.Namespace) -> int:
     from obsidian_wiki.cache import update_source
     vault = Path(args.vault).expanduser().resolve()
@@ -1346,6 +1466,48 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         _print_doctor(report)
     statuses = {check["status"] for check in report["checks"]}
     if "fail" in statuses or (args.strict and "warn" in statuses):
+        return 1
+    return 0
+
+
+def _print_backlog(report: dict[str, object]) -> None:
+    summary = report["summary"]
+    print(f"obsidian-wiki backlog: {report['status']}")
+    print(
+        f"total: {summary['total']}  "
+        f"critical: {summary['critical']}  "
+        f"needs_ingest: {summary['needs_ingest']}  "
+        f"maintenance: {summary['maintenance']}"
+    )
+    for item in report["items"]:
+        print(f"  - [{item['severity']}] {item['title']}")
+        print(f"    action: {item['action']}")
+
+
+def cmd_backlog(args: argparse.Namespace) -> int:
+    from obsidian_wiki.backlog import build_backlog, write_backlog
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, config, _config_source = context
+    link_format = args.link_format or config.get("OBSIDIAN_LINK_FORMAT", "wikilink")
+    try:
+        report = build_backlog(vault, link_format=link_format)
+        if args.write:
+            path = write_backlog(vault, report)
+            report = {**report, "written": str(path)}
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report, indent=2 if args.pretty else None))
+    else:
+        _print_backlog(report)
+        if args.write:
+            print(f"written: {report['written']}")
+    if report["status"] == "fail" or (args.strict and report["status"] == "warn"):
         return 1
     return 0
 
@@ -1822,6 +1984,45 @@ def cmd_context_pack(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_project_timelines(report: dict[str, object]) -> None:
+    print(f"project timelines: {report['status']}")
+    print(
+        f"projects: {report['projects_scanned']}  "
+        f"entries: {report['entries']}  "
+        f"changed: {len(report['changed'])}"
+    )
+    for path in report["changed"]:
+        print(f"  - {path}")
+    for error in report["errors"]:
+        location = f" ({error['path']})" if error.get("path") else ""
+        print(f"  error: {error['message']}{location}")
+
+
+def cmd_project_timelines(args: argparse.Namespace) -> int:
+    from obsidian_wiki.projects import (
+        check_project_timelines,
+        write_project_timelines,
+    )
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, config, _config_source = context
+    link_format = args.link_format or config.get("OBSIDIAN_LINK_FORMAT", "wikilink")
+    report = (
+        check_project_timelines(vault, link_format=link_format)
+        if args.check
+        else write_project_timelines(vault, link_format=link_format)
+    )
+    if args.json:
+        print(json.dumps(report, indent=2 if args.pretty else None))
+    else:
+        _print_project_timelines(report)
+    if report["status"] in {"error", "drift"}:
+        return 1
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     for name in list_skills():
         print(name)
@@ -2014,6 +2215,119 @@ def build_parser() -> argparse.ArgumentParser:
                      help='JSON array of {"id": N, "name": "...", "summary": "..."}; use - for stdin')
     snm.set_defaults(func=cmd_sessions_name)
 
+    ss = sub.add_parser(
+        "source-state",
+        help="report opaque source cursors, derived debt, and heartbeat health",
+    )
+    ss.add_argument(
+        "vault",
+        nargs="?",
+        help="vault path or @name (defaults via CWD .env, then global config)",
+    )
+    ss.add_argument(
+        "--source",
+        action="append",
+        metavar="ID",
+        help="report only this source id (repeatable; default: all tracked sources)",
+    )
+    ss.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero for debt, stale/error heartbeat, or requested untracked sources",
+    )
+    ss.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    ss.set_defaults(func=cmd_source_state)
+
+    ssu = sub.add_parser(
+        "source-state-update",
+        help="atomically update one source's opaque cursors or heartbeat",
+    )
+    ssu.add_argument(
+        "vault",
+        nargs="?",
+        help="vault path or @name (defaults via CWD .env, then global config)",
+    )
+    ssu.add_argument("--source", required=True, metavar="ID", help="stable source id")
+    ssu.add_argument(
+        "--observed-cursor",
+        metavar="CURSOR",
+        help="latest source watermark durably observed by its adapter",
+    )
+    ssu.add_argument(
+        "--applied-cursor",
+        metavar="CURSOR",
+        help="latest watermark fully materialized into required wiki artifacts",
+    )
+    ssu.add_argument(
+        "--cursor-kind",
+        metavar="KIND",
+        help="opaque cursor namespace, such as opaque, sha256, or git-oid",
+    )
+    heartbeat = ssu.add_mutually_exclusive_group()
+    heartbeat.add_argument(
+        "--heartbeat-ok",
+        action="store_true",
+        help="record a successful source check without moving either cursor",
+    )
+    heartbeat.add_argument(
+        "--heartbeat-error",
+        metavar="SUMMARY",
+        help="record a failed source check without moving either cursor",
+    )
+    ssu.add_argument(
+        "--stale-after-seconds",
+        type=float,
+        metavar="SECONDS",
+        help="mark the heartbeat stale after this many seconds without success",
+    )
+    ssu.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    ssu.set_defaults(func=cmd_source_state_update)
+
+    sbc = sub.add_parser(
+        "source-bundle-create",
+        help="capture a local primary source and optional media as one immutable bundle",
+    )
+    sbc.add_argument(
+        "vault",
+        nargs="?",
+        help="vault path or @name (defaults via CWD .env, then global config)",
+    )
+    sbc.add_argument("--id", dest="bundle_id", required=True, metavar="ID", help="stable bundle id")
+    sbc.add_argument("--source", required=True, metavar="FILE", help="local primary source file")
+    sbc.add_argument("--source-type", default="file", metavar="TYPE", help="provider-neutral source type")
+    sbc.add_argument("--original-uri", metavar="URI", help="optional original source URI")
+    sbc.add_argument("--media", action="append", default=[], metavar="FILE", help="local media to copy (repeatable)")
+    sbc.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    sbc.set_defaults(func=cmd_source_bundle_create)
+
+    sbm = sub.add_parser(
+        "source-bundle-media",
+        help="copy one local media file into an existing immutable source bundle",
+    )
+    sbm.add_argument(
+        "vault",
+        nargs="?",
+        help="vault path or @name (defaults via CWD .env, then global config)",
+    )
+    sbm.add_argument("--id", dest="bundle_id", required=True, metavar="ID", help="stable bundle id")
+    sbm.add_argument("--media", required=True, metavar="FILE", help="local media file to copy")
+    sbm.add_argument("--name", metavar="FILENAME", help="bundle-local media filename")
+    sbm.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    sbm.set_defaults(func=cmd_source_bundle_media)
+
+    sbs = sub.add_parser(
+        "source-bundles",
+        help="verify immutable source bundle manifests and captured artifact hashes",
+    )
+    sbs.add_argument(
+        "vault",
+        nargs="?",
+        help="vault path or @name (defaults via CWD .env, then global config)",
+    )
+    sbs.add_argument("--id", dest="bundle_id", action="append", metavar="ID", help="check only this bundle (repeatable)")
+    sbs.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    sbs.set_defaults(func=cmd_source_bundles)
+
     cc = sub.add_parser(
         "cache-check",
         help="check which sources are new/modified/unchanged vs. .manifest.json",
@@ -2090,6 +2404,22 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
     dr.add_argument("--strict", action="store_true", help="exit non-zero on warnings as well as failures")
     dr.set_defaults(func=cmd_doctor)
+
+    bl = sub.add_parser(
+        "backlog",
+        help="aggregate deterministic maintenance debt across source state, bundles, manifest, and timelines",
+    )
+    bl.add_argument("vault", nargs="?", help="vault path or @name (defaults via CWD .env, then global config)")
+    bl.add_argument(
+        "--link-format",
+        choices=("wikilink", "markdown"),
+        help="override OBSIDIAN_LINK_FORMAT for project timeline checks",
+    )
+    bl.add_argument("--write", action="store_true", help="write generated _backlog.md")
+    bl.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    bl.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    bl.add_argument("--strict", action="store_true", help="exit non-zero on warnings as well as failures")
+    bl.set_defaults(func=cmd_backlog)
 
     lt = sub.add_parser(
         "lint",
@@ -2234,6 +2564,29 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--json", action="store_true", help="emit structured JSON")
     cp.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
     cp.set_defaults(func=cmd_context_pack)
+
+    pt = sub.add_parser(
+        "project-timelines",
+        help="check or rebuild generated project timeline blocks",
+    )
+    pt.add_argument(
+        "vault",
+        nargs="?",
+        help="vault path or @name (defaults via CWD .env, then global config)",
+    )
+    pt.add_argument(
+        "--check",
+        action="store_true",
+        help="report drift without changing project overview pages",
+    )
+    pt.add_argument(
+        "--link-format",
+        choices=("wikilink", "markdown"),
+        help="override OBSIDIAN_LINK_FORMAT for generated links",
+    )
+    pt.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    pt.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    pt.set_defaults(func=cmd_project_timelines)
 
     return p
 

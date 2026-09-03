@@ -39,8 +39,8 @@ _TAGS_RE = re.compile(r"^tags:\s*\[([^\]]+)\]", re.MULTILINE)
 _TAGS_LIST_RE = re.compile(r"^tags:\s*\n((?:\s+-\s+\S+\n)+)", re.MULTILINE)
 _CATEGORY_RE = re.compile(r"^category:\s*(\w+)", re.MULTILINE)
 _TIER_RE = re.compile(r"^tier:\s*(\w+)", re.MULTILINE)
-_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:[|#][^\]]*?)?\]\]")
-_MD_LINK_RE = re.compile(r"\[.*?\]\(([^)]+\.md[^)]*)\)")
+_WIKILINK_RE = re.compile(r"(?<!!)\[\[([^\]|#]+?)(?:[|#][^\]]*?)?\]\]")
+_MD_LINK_RE = re.compile(r"(?<!!)\[.*?\]\(([^)]+\.md[^)]*)\)")
 
 # A bare `>`, `>-`, `>+`, `|`, `|-`, `|+` (optionally followed by an indent
 # indicator digit) marks a YAML block scalar — the real value lives on the
@@ -54,6 +54,7 @@ from obsidian_wiki.graph_analysis import (  # noqa: E402
     iter_pages,
     shortest_path,
 )
+from obsidian_wiki.projects import strip_generated_project_timeline  # noqa: E402
 
 __all__ = ["SKIP_DIRS", "SKIP_ROOT_FILES", "build_index", "classify_query",
            "find_path", "query", "rank_candidates"]
@@ -161,14 +162,15 @@ def build_index(vault: Path) -> dict[str, dict]:
             text = page.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        material_text = strip_generated_project_timeline(text)
 
-        for link in _WIKILINK_RE.findall(text):
+        for link in _WIKILINK_RE.findall(material_text):
             target = _slug(link.split("/")[-1])
             if target and target != slug and target in known:
                 pages[slug]["out_links"].append(target)
                 pages[target]["in_links"].append(slug)
 
-        for href in _MD_LINK_RE.findall(text):
+        for href in _MD_LINK_RE.findall(material_text):
             target = _slug(Path(href).stem)
             if target and target != slug and target in known:
                 pages[slug]["out_links"].append(target)
@@ -191,13 +193,16 @@ def _score(slug: str, entry: dict, terms: list[str]) -> float:
     tags_lower = [t.lower() for t in entry["tags"]]
     for term in terms:
         t = term.lower()
+        # Prefix word-boundary match: a short function word cannot hit inside
+        # an unrelated longer word. Prefix matching keeps inflected forms.
+        pattern = re.compile(rf"\b{re.escape(t)}")
         if t == slug or t == title_lower:
             score += 10.0
-        elif t in title_lower:
+        elif pattern.search(title_lower):
             score += 6.0
-        elif any(t in tag for tag in tags_lower):
+        elif any(pattern.search(tag) for tag in tags_lower):
             score += 4.0
-        elif t in summary_lower:
+        elif pattern.search(summary_lower):
             score += 2.0
 
     if score > 0:
@@ -330,6 +335,23 @@ _STRUCTURAL = (
 # token means it can never match a title, tag or summary.
 _TERM_PUNCT = "?,.'\""
 
+# Function words dropped from direct fallback terms. Keep this multilingual so
+# common short words do not add retrieval noise in mixed-language questions.
+_STOP_WORDS = {
+    "what", "the", "a", "an", "is", "are", "how", "does", "do", "in", "of",
+    "to", "for", "and", "or",
+    # German
+    "was", "wie", "ich", "der", "die", "das", "den", "dem", "des", "ein",
+    "eine", "einer", "einem", "einen", "ist", "sind", "über", "und", "oder",
+    "für", "auf", "mit", "im",
+    # French
+    "que", "qui", "quoi", "comment", "le", "la", "les", "un", "une", "des",
+    "est", "sont", "sur", "pour", "et", "ou", "dans",
+    # Spanish
+    "qué", "que", "cómo", "el", "la", "los", "las", "un", "una", "es", "son",
+    "para", "por", "en", "sobre",
+}
+
 
 def _split_terms(text: str) -> list[str]:
     """Split on whitespace, strip surrounding punctuation, drop empties."""
@@ -366,8 +388,7 @@ def classify_query(question: str) -> tuple[str, list[str]]:
         return "list", terms
 
     # Default: extract meaningful terms (drop stop words)
-    stop = {"what", "the", "a", "an", "is", "are", "how", "does", "do", "in", "of", "to", "for", "and", "or"}
-    terms = [w.strip(_TERM_PUNCT) for w in question.split() if w.lower().strip(_TERM_PUNCT) not in stop and len(w) > 2]
+    terms = [w.strip(_TERM_PUNCT) for w in question.split() if w.lower().strip(_TERM_PUNCT) not in _STOP_WORDS and len(w) > 2]
     return "direct", terms
 
 
@@ -581,7 +602,11 @@ def query(
     top_candidate = candidates[0] if candidates else None
     index_only = False
     if top_candidate and top_candidate["score"] >= 10.0 and top_candidate["summary"]:
-        index_only = True  # Exact title match with a summary — likely answerable from index
+        # A high absolute score alone is insufficient: on well-linked pages,
+        # graph-degree noise may cross the threshold. Require a clear lead.
+        runner_up = candidates[1]["score"] if len(candidates) > 1 else 0.0
+        if runner_up == 0.0 or top_candidate["score"] >= 2 * runner_up:
+            index_only = True
     if graph_answer is not None:
         index_only = True  # structural answers are complete without page reads
 

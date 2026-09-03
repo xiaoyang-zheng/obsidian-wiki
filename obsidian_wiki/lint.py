@@ -8,6 +8,8 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
+from obsidian_wiki.projects import lint_project_metadata, strip_generated_project_timeline
+from obsidian_wiki.source_bundles import lint_source_bundle_closure
 from obsidian_wiki.trust import (
     ALLOWED_LIFECYCLES,
     TRUST_LEDGER_RELATIVE_PATH,
@@ -16,7 +18,7 @@ from obsidian_wiki.trust import (
     validate_trust_metadata,
 )
 
-SKIP_DIRS = frozenset("_raw _archived _staging _archives _bootstrap .obsidian .git".split())
+SKIP_DIRS = frozenset("_raw _sources _archived _staging _archives _bootstrap .obsidian .git".split())
 REQUIRED_FRONTMATTER = (
     "title",
     "category",
@@ -41,8 +43,8 @@ ALLOWED_RELATIONSHIP_TYPES = frozenset(
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 _FIELD_RE = re.compile(r"^([A-Za-z_][\w-]*):", re.MULTILINE)
-_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:[|#][^\]]*?)?\]\]")
-_MD_LINK_RE = re.compile(r"\[.*?\]\(([^)]+\.md[^)]*)\)")
+_WIKILINK_RE = re.compile(r"(?<!!)\[\[([^\]|#]+?)(?:[|#][^\]]*?)?\]\]")
+_MD_LINK_RE = re.compile(r"(?<!!)\[.*?\]\(([^)]+\.md[^)]*)\)")
 _RELATIONSHIP_LIST_FIELD_RE = re.compile(
     r"^\s*-\s*(type|target):\s*(.*?)\s*$"
 )
@@ -58,6 +60,7 @@ def _iter_pages(vault: Path) -> list[Path]:
     return [
         path for path in vault.rglob("*.md")
         if not any(part in SKIP_DIRS for part in path.relative_to(vault).parts)
+        and not (path.name == "_backlog.md" and len(path.relative_to(vault).parts) == 1)
     ]
 
 
@@ -154,6 +157,7 @@ def _normalise_node_id(raw: str) -> str:
 
 def _parse_page(path: Path, vault: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8", errors="replace")
+    material_text = strip_generated_project_timeline(text)
     front_match = _FRONTMATTER_RE.match(text)
     frontmatter = front_match.group(1) if front_match else ""
     fields = set(_FIELD_RE.findall(frontmatter))
@@ -161,11 +165,11 @@ def _parse_page(path: Path, vault: Path) -> dict[str, Any]:
     relative = path.relative_to(vault)
 
     links: list[str] = []
-    for raw in _WIKILINK_RE.findall(text):
+    for raw in _WIKILINK_RE.findall(material_text):
         target = _slug(raw.split("/")[-1])
         if target:
             links.append(target)
-    for href in _MD_LINK_RE.findall(text):
+    for href in _MD_LINK_RE.findall(material_text):
         target = _slug(Path(href).stem)
         if target:
             links.append(target)
@@ -348,6 +352,11 @@ def lint_vault(
         if ledger_path.is_file()
         else []
     )
+    project_findings = lint_project_metadata(vault)
+    source_bundle_findings = lint_source_bundle_closure(
+        vault,
+        [vault / page["path"] for page in pages],
+    )
 
     findings = {
         "broken_links": broken_links,
@@ -363,6 +372,8 @@ def lint_vault(
         "confidence_mismatches": trust_report["score_mismatches"] if trust_report else [],
         "confidence_ledger_errors": trust_report["errors"] if trust_report else [],
         "illegal_lifecycle_transitions": illegal_lifecycle_transitions,
+        **project_findings,
+        **source_bundle_findings,
     }
     counts = {name: len(items) for name, items in findings.items()}
 
@@ -390,18 +401,43 @@ def lint_vault(
             "illegal_lifecycle_transitions",
         )
     )
+    project_hard_finding_names = (
+        "invalid_project_memberships",
+        "missing_project_targets",
+        "conflicting_project_membership",
+        "ambiguous_project_overviews",
+        "invalid_timeline_metadata",
+        "malformed_project_timeline_markers",
+    )
+    source_bundle_hard_finding_names = (
+        "invalid_source_bundles",
+        "invalid_source_bundle_bindings",
+        "missing_source_bundle_targets",
+        "missing_source_entities",
+        "missing_source_entity_links",
+        "missing_entity_source_backlinks",
+    )
 
     if (
         counts["broken_links"]
         or counts["missing_frontmatter"]
         or counts["trust_metadata_errors"]
+        or any(counts[name] for name in project_hard_finding_names)
+        or any(counts[name] for name in source_bundle_hard_finding_names)
         or trust_fails
     ):
         status = "fail"
     elif (
         any(
             counts[name]
-            for name in ("duplicate_titles", "missing_summaries", "orphan_pages", "typed_relationship_issues")
+            for name in (
+                "duplicate_titles",
+                "missing_summaries",
+                "orphan_pages",
+                "typed_relationship_issues",
+                "redundant_legacy_project_field",
+                "project_timeline_drift",
+            )
         )
         or trust_findings_present
     ):

@@ -21,6 +21,34 @@ The user's original documents — articles, papers, notes, PDFs, conversation lo
 
 Think of raw sources as the "source code" — authoritative but hard to query directly.
 
+### Durable source bundles
+
+Use `_sources/<bundle-id>/` when a source must remain reproducible after ingest:
+the primary artifact goes in `raw/`, locally preserved figures or attachments go
+in `media/`, and `bundle.json` records their hashes. Create them only through
+the deterministic commands:
+
+```bash
+obsidian-wiki source-bundle-create "$OBSIDIAN_VAULT_PATH" --id <id> --source <local-file>
+obsidian-wiki source-bundle-media "$OBSIDIAN_VAULT_PATH" --id <id> --media <local-file>
+```
+
+Never edit or replace a captured artifact. If evidence changes, create a new
+bundle rather than mutating the old one. Bundle media must be copied from a
+local file; a provider-specific adapter may fetch it first, but credentials and
+provider APIs do not belong in the generic core. `_sources/` is excluded from
+the normal wiki graph and retrieval surface.
+
+To make a distilled page accountable to a bundle, write:
+
+```yaml
+source_bundle: <id>
+entities: [entities/<canonical-entity>]
+```
+
+Each declared entity requires a body link and a backlink from that entity page.
+For a genuinely entity-free source, use `entities: none` explicitly.
+
 Don't confuse this with the in-vault `_raw/` staging folder, which is a different thing: a scratch inbox for quick captures and drafts awaiting promotion (see `wiki-capture` and `wiki-ingest`). Files there aren't Layer 1 sources, but `wiki-ingest` still moves rather than deletes them on promotion, since some have no other copy.
 
 ### Layer 2: The Wiki (LLM-maintained)
@@ -81,6 +109,18 @@ $OBSIDIAN_VAULT_PATH/
 **When knowledge is general** (a concept like "React Server Components", a person like "Andrej Karpathy", a widely applicable skill), put it in the global category directory.
 
 **Cross-referencing:** Project pages should `[[wikilink]]` to global pages and vice versa. A project's overview page should link to the key concept, skill, and entity pages relevant to that project — whether they live under the project or globally.
+
+**Membership is not mention:** Write `projects: [my-project]` in frontmatter when a page is evidence for that project. A body link, `relationships:` entry, or tag that names a project is only a mention and must not create membership. Readers accept legacy `project:` and project-directory placement only as compatibility fallbacks; new writes use `projects:`.
+
+Optional timeline metadata:
+
+```yaml
+projects: [my-project]
+timeline_date: 2026-09-01
+timeline_blurb: Added a recoverable incremental ingest protocol.
+```
+
+Use `timeline_date`, then `created` for chronology — never `updated`, because editing prose must not move a historical event. Use `timeline_blurb`, then `summary`, then `title` for the entry text. After membership-bearing pages change, run `obsidian-wiki project-timelines "$OBSIDIAN_VAULT_PATH"`. The renderer owns only `<!-- BEGIN obsidian-wiki:auto-project-timeline -->` through its matching END marker; never hand-edit or overwrite content outside that block.
 
 **Naming rule:** The project overview file must be named `<project-name>.md`, not `_project.md`. Obsidian's graph view uses the filename as the node label — `_project.md` makes every project appear as `_project` in the graph, making it unreadable. So `projects/my-project/my-project.md`, `projects/another-project/another-project.md`, etc.
 
@@ -590,11 +630,38 @@ VAULT_ID=$(echo "$OBSIDIAN_VAULT_PATH" | md5sum 2>/dev/null || md5 -q - <<< "$OB
 STATE_DIR="$(obsidian_wiki_config_dir)/state/$VAULT_ID"
 ```
 
+Continuous adapters must use the generic source-state CLI in that directory:
+
+```bash
+obsidian-wiki source-state-update "$OBSIDIAN_VAULT_PATH" --source <stable-id> \
+  --observed-cursor <opaque-cursor> --heartbeat-ok
+# Only after required wiki writes succeed:
+obsidian-wiki source-state-update "$OBSIDIAN_VAULT_PATH" --source <stable-id> \
+  --applied-cursor <same-opaque-cursor>
+```
+
+`observed` means source data is durably captured; `applied` means it has been fully materialized. Their inequality is digest debt. A heartbeat error moves neither cursor. This runtime sidecar is not `.manifest.json`, and provider-specific adapters or credentials do not belong in the generic core.
+
 ### Standard "Before You Start" block
 
 Every skill's setup section should read:
 
 > **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md`. Honor an inline `@name` override first, then walk up from CWD for `.env`, fall back to the global config, else prompt setup. This gives `OBSIDIAN_VAULT_PATH` and any tool-specific path overrides.
+
+## Writing Profile Resolution
+
+Before drafting or rewriting natural-language Markdown, resolve the global
+config directory with the XDG/legacy algorithm above, then read
+`<global config dir>/WRITING.md` when it exists. A missing or empty profile
+means there are no custom writing preferences. If the optional read fails, warn
+and continue with the default framework guidance.
+
+The precedence is framework invariants > current task/skill requirements >
+current project `AGENTS.md` > vault `AGENTS.md` > global `WRITING.md`.
+Framework invariants include schema, provenance, and safety. Writing preferences
+apply only to newly drafted or rewritten natural-language fields and bodies;
+they cannot alter YAML syntax, required keys, structure, types, source fidelity,
+JSON, or generated records.
 
 ## Environment Variables
 
@@ -618,6 +685,8 @@ The wiki is configured through environment variables (see `.env.example`). The o
 - `LINT_SCHEDULE` — how often `daily-update` also runs `wiki-lint`: `daily` \| `weekly` (default) \| `manual`. See `daily-update`, Step 4a.
 
 No API keys are needed — the agent running these skills already has LLM access built in.
+
+Installing these skills never migrates or rewrites an existing vault automatically. Provider-specific private adapters remain separate; use explicit ingest, import, or `project-timelines` commands for deliberate changes.
 
 ## Modes of Operation
 
