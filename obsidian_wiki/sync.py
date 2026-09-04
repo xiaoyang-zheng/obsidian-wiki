@@ -22,12 +22,13 @@ GITIGNORE_CONTENT = (
     ".obsidian/cache\n"
     ".trash/\n"
     ".graph-cache.json\n"
+    "_meta/promotion-candidates.lock\n"
 )
 
 #: Derived files that should never be committed — they are regenerable and
 #: churn on every graph change. Backfilled into vaults whose .gitignore
 #: predates them.
-_DERIVED_IGNORES = (".graph-cache.json",)
+_DERIVED_IGNORES = (".graph-cache.json", "_meta/promotion-candidates.lock")
 
 
 def _git(vault_path: Path, *args: str) -> subprocess.CompletedProcess:

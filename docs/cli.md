@@ -39,8 +39,9 @@ Commands other than `setup`, `info`, and `doctor` warn you when the install has 
 |---|---|
 | `query <question>` | Answer a question from the configured vault's index |
 | `lint [vault]` | Find missing frontmatter, broken links, duplicates, and orphans |
-| `backlog [vault]` | Aggregate deterministic maintenance debt across source state, bundles, manifest, and project timelines |
+| `backlog [vault]` | Aggregate deterministic maintenance debt across source state, bundles, manifest, project timelines, and promotion candidates |
 | `project-timelines [vault]` | Check or rebuild generated project timelines from explicit membership metadata |
+| `promotion-candidates [vault]` | List or inspect concept/entity promotion candidates |
 
 ```bash
 obsidian-wiki query "what do I know about MCP security?"
@@ -59,6 +60,7 @@ obsidian-wiki backlog /path/to/vault --write
 obsidian-wiki project-timelines                 # rebuild changed generated blocks
 obsidian-wiki project-timelines @research --check
 obsidian-wiki project-timelines /path/to/vault --link-format markdown
+obsidian-wiki promotion-candidates /path/to/vault --state eligible --pretty
 ```
 
 Lint resolves its vault and schema together: explicit path (no config inheritance), positional `@name`, nearest CWD `.env`, then global config. CLI schema flags extend/replace that resolved vault's settings and are recorded in the JSON `schema` block.
@@ -102,10 +104,54 @@ existing machine-checkable signals:
 - source page to entity closure failures
 - project timeline drift and marker/schema errors
 - manifest filesystem sources that are missing or whose content hash changed
+- eligible concept/entity promotion plans and batched ambiguity/conflict review; an invalid promotion ledger is critical
 
 By default the command is read-only. With `--write`, it atomically writes a
 generated root `_backlog.md`. That file is excluded from the normal graph,
 trust, project timeline, lint page scan, and context-pack surfaces.
+
+### Paper inspection and candidate promotion
+
+`paper-inspect` is a deterministic, read-only preprocessor for local PDFs. It
+computes the source SHA-256, derives separate `work_id` and `edition_id` values
+from arXiv/DOI clues (falling back to the hash), and emits bounded page, image,
+caption, table, and formula candidates. Install the optional backend with:
+
+```bash
+pip install 'obsidian-wiki[paper]'
+obsidian-wiki paper-inspect ~/Papers/attention.pdf \
+  --source-url https://arxiv.org/abs/1706.03762v7 \
+  --output /tmp/attention-inspect --pretty
+```
+
+Without `--output`, the command writes nothing. An output directory must not
+already exist; it contains `inspect.json` and any extractable image candidates.
+Candidates are locators for an agent or human to verify, not accepted semantic
+claims. Per-image and total-export byte ceilings, page count, text size, and
+candidate count are bounded; override them with the corresponding `--max-*`
+flags when a trusted paper legitimately exceeds a default. The source PDF is
+never modified. `candidate_budget_exhausted: true` means the report reached the
+candidate ceiling, so consumers should raise the limit before assuming the
+candidate set is complete.
+
+The promotion ledger at `_meta/promotion-candidates.json` prevents one-off
+concept and entity mentions from immediately expanding the graph:
+
+```bash
+obsidian-wiki promotion-observe /path/to/vault --kind concept \
+  --title "Sparse Attention" --source-lineage arxiv:2401.01234 \
+  --evidence-path references/paper.md --confidence 0.90 --core-contribution
+obsidian-wiki promotion-candidates /path/to/vault --state eligible --pretty
+obsidian-wiki promotion-resolve /path/to/vault --kind concept \
+  --slug sparse-attention --resolution promoted \
+  --canonical-path concepts/sparse-attention.md --resolved-by wiki-ingest
+```
+
+By default, a candidate becomes eligible when it is a core contribution with
+confidence at least `0.85`, or when at least two independent source lineages
+each reach `0.70`. Ambiguity and canonical-name conflicts block automatic
+eligibility. The ledger returns a promotion plan but never writes Markdown; a
+`promoted` resolution is accepted only after the exact canonical page exists.
 
 ### Project timelines
 
@@ -303,6 +349,10 @@ Available for automation, scripting, and debugging. Skills call some of these in
 | `source-bundle-media [vault] --id ID --media FILE` | Add local media to an existing source bundle |
 | `source-bundles [vault]` | Verify source bundle manifests and artifact hashes |
 | `project-timelines [vault] [--check]` | Check or rebuild generated project overview timeline blocks |
+| `paper-inspect <pdf>` | Read-only paper identity and bounded figure/table/formula candidate extraction |
+| `promotion-candidates [vault]` | List or inspect candidate state and deterministic promotion plans |
+| `promotion-observe [vault] ...` | Atomically add one independent evidence observation |
+| `promotion-resolve [vault] ...` | Mark an existing candidate promoted or rejected; never create its page |
 | `ast-extract <path>` | Extract classes, functions, and imports from code — no LLM, no API calls |
 | `code-understand --project <dir> [--backend auto\|builtin\|codegraph] [--since <sha>] [--changed <file>...] [--max-symbols N] [--pretty]` | Emit a ranked code-understanding focus map (symbols + file:line citations) for a project; CodeGraph when available, built-in AST + rg otherwise. `--backend` beats the resolved `CODE_UNDERSTANDING_*` config (env → project `.env` → global config). Used by wiki-update Step 3b. |
 
@@ -319,6 +369,8 @@ obsidian-wiki batch-plan /path/to/vault ~/research --max-mb 4 --max-files 30
 obsidian-wiki cache-check /path/to/vault ~/research/*.pdf
 obsidian-wiki cache-update /path/to/vault ~/research/paper.pdf --pages concepts/attention.md
 obsidian-wiki backlog /path/to/vault --json --pretty
+obsidian-wiki paper-inspect ~/research/paper.pdf --output /tmp/paper-inspect --pretty
+obsidian-wiki promotion-candidates /path/to/vault --state eligible --pretty
 obsidian-wiki ast-extract ./src --pretty
 obsidian-wiki code-understand --project . --since <last_commit_synced> --pretty
 ```
@@ -330,6 +382,11 @@ Most commands accept `--json` and/or `--pretty` for machine-readable output.
 `.manifest.json` is a read-modify-write, and parallel ingest agents (`batch-plan` fan-out) or the Docker server writing while a local skill writes would otherwise clobber each other — losing a whole source entry silently.
 
 `cache-update` therefore takes an advisory lock (`.manifest.lock` in the vault root, `O_CREAT|O_EXCL`, stdlib only so it works on Windows) and writes the manifest atomically via a temp file plus `os.replace`. A reader never sees a partial file, and a crashed writer's lock is stolen after 60 seconds.
+The promotion ledger instead uses a persistent `_meta/promotion-candidates.lock`
+inode with an OS advisory lock (`flock`/Windows locking); a process exit releases
+it automatically, so recovery never deletes a successor's lock. `sync-setup`
+adds this runtime file to new vault `.gitignore` files and advises owners of
+existing ignore files to add it.
 
 In parallel runs, always update the manifest through `obsidian-wiki cache-update` rather than hand-editing `.manifest.json` — hand edits bypass the lock.
 

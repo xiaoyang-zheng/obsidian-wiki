@@ -252,14 +252,52 @@ reading the PDF directly with page ranges. Never block an ingest on PageIndex.
 
 Research papers (arXiv/conference PDFs) carry their substance in figures, equations, and results tables — exactly what plain text extraction drops. A normal arXiv PDF has a text layer, so the image branch above never fires and its diagrams are skipped by default. When a source is an academic paper, override that:
 
-1. **Read the text layer** for the narrative (problem, method, claims), then **re-read the figure- and equation-dense pages with vision** (`Read pages: "N"`) — the architecture/method figure (often Figure 1) and the main results table rarely live in the text layer.
-2. **Capture the method visually — prefer the paper's real figures.**
-   - **Embed the paper's own architecture/method figure as the primary visual.** Most arXiv figures are a single embedded raster. With PyMuPDF (`fitz`): use `page.get_image_info(xrefs=True)` to find the figure's `xref` and bbox — it is usually the wide image sitting just above its caption (locate the caption with `page.search_for("Figure N")`) — then `img = doc.extract_image(xref)` and save `img["image"]` to `attachments/<slug>-figN.<ext>` using the native `img["ext"]` (it may be JPEG, not PNG — don't hardcode the extension; downscale oversized figures, e.g. `sips -Z 1800 <file>`). If the figure is vector rather than raster (`extract_image` returns nothing and `page.get_drawings()` is non-empty), render the bbox region instead: `page.get_pixmap(clip=rect, matrix=fitz.Matrix(4, 4))` — compute `rect` by unioning `get_drawings()` rects (drawings-only; text blocks pull in body text) within one column above the caption, and in multi-column papers bound the window below the previous element so adjacent tables/text aren't caught; verify the render and re-crop if needed. Embed with `![[<slug>-figN.<ext>]]` plus an italic caption.
-   - **Also embed a key results / motivating figure** when the paper has one — a scaling plot, a benchmark chart, or a capability collage — in the Results section alongside the table.
-   - **Mermaid is the dependency-free fallback.** If PyMuPDF/poppler isn't available or a figure can't be extracted, draw the architecture as a Mermaid diagram instead — Obsidian renders Mermaid fenced code blocks natively with no dependencies. `![[<source>.pdf#page=N]]` (the whole source page) is another no-extract option.
-3. **Keep the math as math.** Set the 1–3 core equations as `$$…$$` display LaTeX, not backtick code.
-4. **Tabulate results.** Render headline benchmark numbers as a markdown table, not a comma-separated blob.
-5. **Write the page with the Paper Deep-Dive Template** (`llm-wiki/SKILL.md`) into `references/`, in addition to the distilled concept/entity cross-links. This is the deliberate exception to "aim for 10–15 small pages" (Step 4) — a paper earns one rich, self-contained page.
+1. **Compile a deterministic inspection first.** Run this before interpreting the
+   PDF, using a fresh output directory outside the vault. The source is read-only,
+   and the output path is create-only, so a retry must use a different fresh path.
+
+   ```bash
+   obsidian-wiki paper-inspect <paper.pdf> --source-url <canonical-url> \
+     --output <fresh-temp-directory> --pretty
+   ```
+
+   Install `obsidian-wiki[paper]` when the command reports that PyMuPDF is
+   unavailable. Do not replace or mutate the source PDF. The JSON is a bounded
+   candidate manifest, not a truth oracle: use `identity.work_id` to deduplicate
+   the research work, `identity.edition_id` to distinguish versions, and the
+   page/bbox/caption/table/formula/image candidates to decide which pages need
+   close reading. Before creating a paper page, search `references/` for the
+   exact `paper_work_id`; merge another edition into that work's canonical page
+   instead of creating a duplicate. If `identity.ambiguous` is true, do not use
+   either external identifier as a merge key; retain the hash edition and route
+   the conflict for review. Persist `paper_work_id`, the current
+   `paper_edition_id`, cumulative `paper_editions`, and
+   `paper_source_sha256` in its frontmatter. Keep an Edition History section
+   when more than one edition has been ingested. When identity evidence
+   conflicts, preserve both clues and mark the merge ambiguous rather than
+   silently collapsing editions. If `candidate_budget_exhausted` is true, raise
+   the candidate limit and inspect again before treating the manifest as complete.
+2. **Read the text layer** for the narrative (problem, method, claims), then
+   **re-read candidate figure-, table-, and equation-dense pages with vision**
+   (`Read pages: "N"`). Candidate detection narrows attention; it does not turn
+   captions into verified equations or tables.
+3. **Capture the method visually — prefer the paper's real figures.** Select the
+   architecture/method figure and, when useful, one key results or motivating
+   figure from the exported candidates. Verify each crop visually, then copy the
+   selected artifacts into the immutable source bundle's `media/` directory and
+   embed those bundle-local paths. Never link to the temporary inspect output.
+   Vector figures that do not yield an exported raster still require a page render
+   or vision crop. Mermaid is the dependency-free fallback, and
+   `![[<source>.pdf#page=N]]` is the no-extract fallback.
+4. **Keep the math as math.** Use the formula candidates as locators, re-read the
+   source, and typeset only the 1–3 verified core equations as `$$…$$` display
+   LaTeX, not backtick code.
+5. **Tabulate results.** Use table candidates as locators and render verified
+   headline benchmark numbers as a markdown table, not a comma-separated blob.
+6. **Write the page with the Paper Deep-Dive Template** (`llm-wiki/SKILL.md`)
+   into `references/`, in addition to qualified concept/entity cross-links. This
+   is the deliberate exception to "aim for 10–15 small pages" (Step 4) — a
+   paper earns one rich, self-contained page.
 
 See the *Paper Extraction Frame* in `references/ingest-prompts.md` for the reading checklist.
 
@@ -407,6 +445,42 @@ Before writing anything, plan which pages to update or create. Cap the plan at `
 
 Pages without a `tier:` field are treated as `supporting`. When in doubt, err toward updating — the tier is a cost-control hint, not a hard lock.
 
+#### Concept/entity candidate promotion
+
+Do not create a canonical page for every noun in one source. For a concept or
+entity that does not already have a page and is not important enough for an
+immediate page in this ingest, record evidence in the vault-local candidate
+ledger:
+
+```bash
+obsidian-wiki promotion-observe "$OBSIDIAN_VAULT_PATH" \
+  --kind concept --title "<canonical title>" \
+  --source-lineage "<stable independent source id>" \
+  --evidence-path "<vault-relative source or reference page>" \
+  --confidence <0.0..1.0> [--core-contribution] [--ambiguous]
+```
+
+Use `identity.work_id` from `paper-inspect` as the source lineage for papers
+when available; multiple editions of the same work are one lineage, not
+independent corroboration. A high-confidence core contribution becomes
+`eligible`, as do candidates supported by the ledger policy threshold (two
+independent high-confidence lineages by default). Ambiguous candidates and title/alias conflicts remain
+blocked for batch review. Do not manipulate `_meta/promotion-candidates.json`
+by hand.
+
+List eligible plans before finalizing this ingest:
+
+```bash
+obsidian-wiki promotion-candidates "$OBSIDIAN_VAULT_PATH" \
+  --state eligible --pretty
+```
+
+Each returned `promotion_plan` is deterministic input to the page plan; it does
+not create Markdown. Include eligible plans within the normal page cap, giving
+priority to the current source's eligible candidates. Leave overflow eligible
+for a later run; `obsidian-wiki backlog` keeps it visible. Re-check whether the
+target already exists before writing, and merge when it does.
+
 ### Step 5: Write/Update Pages
 
 For each page in your plan:
@@ -436,6 +510,11 @@ For each page in your plan:
   ```
 - `index.md` and `log.md` are always updated immediately (low-risk tracking files). `hot.md` notes that staged writes are pending.
 - When writing staged pages, use the path `_staging/<category>/` — create the directory if it doesn't exist.
+- Keep promotion candidates `eligible` while their pages are staged.
+  Their ledger `promotion_plan.target_path` is the durable join key;
+  `wiki-stage-commit` resolves matching candidates only after the accepted page
+  is live and its tracking updates succeed. A staged file is not a canonical
+  page.
 
 **If `WIKI_STAGED_WRITES` is not set or is `false` (default):**
 
@@ -592,6 +671,28 @@ Record QMD refresh in the final report as one of:
 - `QMD skipped: qmd CLI unavailable`
 - `QMD failed: <short error summary>`
 
+### Step 10: Resolve Completed Promotions
+
+After the canonical page, index, log, hot cache, manifest, required timeline,
+and any required QMD refresh have all succeeded, resolve each eligible plan
+that was materialized live:
+
+```bash
+obsidian-wiki promotion-resolve "$OBSIDIAN_VAULT_PATH" \
+  --kind <concept|entity> --slug <canonical-slug> \
+  --resolution promoted --canonical-path <concepts-or-entities/page.md> \
+  --resolved-by wiki-ingest
+```
+
+The command verifies that the exact deterministic target page exists inside the
+vault; it never creates that page. Do not resolve a partial ingest. In staged
+writes mode, leave the candidate eligible; `wiki-stage-commit` matches its
+`promotion_plan.target_path` after acceptance and owns resolution. Use
+`--resolution rejected --reason <reason>` only for a deliberate semantic
+rejection, never to hide deferred work. Retrying the same completed resolution
+is idempotent; attempting to change one terminal resolution into the other is
+rejected.
+
 If this ingest is attached to continuous source state, advance its
 `applied-cursor` only after this step and every other required artifact has
 succeeded. In staged-write mode, do not claim live application merely because
@@ -618,6 +719,9 @@ After ingesting, verify:
 - [ ] Bundle-backed pages have `source_bundle:` plus explicit `entities:` or `entities: none`
 - [ ] Every declared entity has a source-page link and a reciprocal entity-page backlink
 - [ ] Important images/attachments are copied into the bundle rather than left as temporary remote URLs
+- [ ] Academic PDFs have a stable `work_id` / `edition_id`, source hash, and visually verified figure/table/formula selections
+- [ ] New concept/entity mentions were merged, promoted from an eligible plan, or recorded with `promotion-observe` rather than creating noisy one-off pages
+- [ ] Live promoted pages were resolved only after all required writes succeeded; staged/deferred candidates remain eligible
 - [ ] Project timelines were rebuilt after live membership/timeline changes (or deferred to `wiki-stage-commit`)
 - [ ] If `QMD_WIKI_COLLECTION` is set and the QMD CLI is available, `qmd update` has run after writing pages
 - [ ] If QMD reports missing vectors or embeddings may be stale, `qmd embed` has run

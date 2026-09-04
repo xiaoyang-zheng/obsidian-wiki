@@ -75,12 +75,23 @@ class TestConfigureSync:
         content = (vault / ".gitignore").read_text()
         assert ".obsidian/workspace.json" in content
         assert ".trash/" in content
+        assert "_meta/promotion-candidates.lock" in content
 
     def test_does_not_overwrite_existing_gitignore(self, vault):
         vault.mkdir(exist_ok=True)
         (vault / ".gitignore").write_text("custom-rule/\n")
         configure_sync(vault, "https://example.com/x.git")
         assert (vault / ".gitignore").read_text() == "custom-rule/\n"
+
+    def test_existing_gitignore_gets_promotion_lock_hint(self, vault):
+        vault.mkdir(exist_ok=True)
+        (vault / ".gitignore").write_text("custom-rule/\n")
+
+        messages = configure_sync(vault, "https://example.com/x.git")
+
+        assert any(
+            "_meta/promotion-candidates.lock" in message for message in messages
+        )
 
     def test_sets_remote(self, vault):
         configure_sync(vault, "https://example.com/x.git")

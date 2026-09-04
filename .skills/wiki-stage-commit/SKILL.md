@@ -17,6 +17,10 @@ You are reviewing LLM-written pages that are waiting in `_staging/` for human ap
 1. **Resolve config** — follow the Config Resolution Protocol in `llm-wiki/SKILL.md`. This gives `OBSIDIAN_VAULT_PATH` and `WIKI_STAGED_WRITES`.
 2. If `WIKI_STAGED_WRITES` is not set or is `false`, tell the user: "Staged writes mode is not enabled. Set `WIKI_STAGED_WRITES=true` in your `.env` to use this feature." Then stop.
 3. Read the `_staging/` directory inventory.
+4. Run `obsidian-wiki promotion-candidates "$OBSIDIAN_VAULT_PATH" --state
+   eligible --pretty` and map each `promotion_plan.target_path` to its staged
+   counterpart. This deterministic path match survives a later review session;
+   do not rely on conversational memory or infer candidates from titles.
 
 ## Invocation Forms
 
@@ -105,6 +109,9 @@ If `--list` flag is set, stop after printing the inventory (Step 1).
 1. Move `_staging/<category>/page.md` → `<category>/page.md` (the final location)
 2. Update `index.md` with the new page entry
 3. Remove the staged file
+4. If this page's final path equals an eligible `promotion_plan.target_path`,
+   retain that plan's candidate ID during review. Resolve it only in Step 4
+   after all accepted files and required tracking updates succeed.
 
 Preserve `projects:`, `timeline_date`, and `timeline_blurb` exactly as reviewed.
 They are membership/timeline metadata; a project link in the body is only a
@@ -148,6 +155,17 @@ After processing all staged files:
    `applied-cursor` only after every accepted page and required timeline/index
    update succeeds. Rejected, skipped, conflicted, or partially applied batches
    remain debt; stage promotion never guesses the adapter's cursor.
+5. For each accepted page tied to an eligible candidate, verify the canonical
+   page exists and run:
+   ```bash
+   obsidian-wiki promotion-resolve "$OBSIDIAN_VAULT_PATH" \
+     --kind <concept|entity> --slug <canonical-slug> \
+     --resolution promoted --canonical-path <category/page.md> \
+     --resolved-by wiki-stage-commit
+   ```
+   Do this last. If any required page or tracking update failed, leave the
+   candidate eligible so backlog recovery remains possible. Rejected staged
+   prose is not automatically a semantic rejection of the candidate.
 
 ## Step 5: Report
 

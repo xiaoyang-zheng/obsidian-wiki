@@ -13,6 +13,11 @@ from typing import Any, Iterable
 from obsidian_wiki.cache import _is_file_key, _iter_entries, _load_manifest, _strip_algo, compute_hash
 from obsidian_wiki.graph_analysis import iter_pages
 from obsidian_wiki.projects import check_project_timelines
+from obsidian_wiki.promotion import (
+    PROMOTION_LEDGER_RELATIVE_PATH,
+    PromotionError,
+    load_ledger,
+)
 from obsidian_wiki.source_bundles import check_source_bundles, lint_source_bundle_closure
 from obsidian_wiki.source_state import build_report
 
@@ -307,6 +312,129 @@ def _project_timeline_items(vault: Path, *, link_format: str) -> list[dict[str, 
     return items
 
 
+def _promotion_items(vault: Path) -> list[dict[str, str]]:
+    """Surface trusted eligible plans and fail closed on an invalid ledger."""
+    try:
+        ledger = load_ledger(vault)
+    except PromotionError as exc:
+        return [
+            _item(
+                "critical",
+                "promotion-ledger",
+                "Promotion candidate ledger cannot be trusted",
+                subject=PROMOTION_LEDGER_RELATIVE_PATH.as_posix(),
+                detail=str(exc),
+                action=(
+                    "Restore or repair the promotion ledger before observing or "
+                    "resolving candidates."
+                ),
+            )
+        ]
+
+    items: list[dict[str, str]] = []
+    for candidate_id, candidate in sorted(ledger["candidates"].items()):
+        if candidate["state"] == "promoted":
+            canonical_path = candidate["canonical_path"]
+            target = vault / canonical_path
+            try:
+                if any(
+                    path.is_symlink()
+                    for path in [
+                        vault / Path(*Path(canonical_path).parts[:index])
+                        for index in range(1, len(Path(canonical_path).parts) + 1)
+                    ]
+                ):
+                    raise ValueError("canonical path contains a symlink")
+                resolved = target.resolve(strict=True)
+                resolved.relative_to(vault)
+                if not resolved.is_file() or resolved.suffix.lower() != ".md":
+                    raise ValueError("canonical path is not a Markdown file")
+            except (FileNotFoundError, ValueError):
+                items.append(
+                    _item(
+                        "critical",
+                        "promotion-ledger",
+                        f"Promoted candidate page is missing: {candidate_id}",
+                        subject=candidate_id,
+                        detail=f"canonical_path={canonical_path}",
+                        action=(
+                            "Restore the canonical page or repair the terminal "
+                            "promotion record after reviewing its provenance."
+                        ),
+                    )
+                )
+            if candidate["eligibility"]["blocked"]:
+                items.append(
+                    _item(
+                        "reference",
+                        "promotion-review",
+                        f"Promoted candidate has a later identity conflict: {candidate['canonical_title']}",
+                        subject=candidate_id,
+                        detail=(
+                            "blocked="
+                            + ",".join(candidate["eligibility"]["blocked"])
+                        ),
+                        action=(
+                            "Review the conflicting candidates together; keep the "
+                            "canonical page unchanged until identity is resolved."
+                        ),
+                    )
+                )
+            continue
+        if candidate["state"] == "rejected":
+            continue
+        if candidate["state"] != "eligible":
+            blocked = candidate["eligibility"]["blocked"]
+            if blocked:
+                items.append(
+                    _item(
+                        "reference",
+                        "promotion-review",
+                        f"Promotion candidate requires review: {candidate['canonical_title']}",
+                        subject=candidate_id,
+                        detail=f"blocked={','.join(blocked)}",
+                        action=(
+                            "Review ambiguity or identity conflicts in one batch; "
+                            "then deliberately promote or reject the candidate."
+                        ),
+                    )
+                )
+            continue
+        plan = candidate["promotion_plan"]
+        if not isinstance(plan, dict):
+            # load_ledger validates this invariant. Keep the guard local so a
+            # future schema change cannot silently hide actionable debt.
+            items.append(
+                _item(
+                    "critical",
+                    "promotion-ledger",
+                    f"Eligible promotion candidate has no plan: {candidate_id}",
+                    subject=candidate_id,
+                    detail="eligible candidate is missing a validated promotion_plan",
+                    action="Repair the promotion ledger before running wiki-ingest.",
+                )
+            )
+            continue
+        items.append(
+            _item(
+                "maintenance",
+                "promotion-candidate",
+                f"Promotion candidate is eligible: {candidate['canonical_title']}",
+                subject=candidate_id,
+                detail=(
+                    f"reason={plan['reason']}; target={plan['target_path']}; "
+                    f"lineages={len(plan['source_lineages'])}"
+                ),
+                action=(
+                    "Run wiki-ingest with the promotion plan, then resolve it as "
+                    "promoted only after the canonical page and required metadata "
+                    "updates succeed."
+                ),
+            )
+        )
+    return items
+
+
 def build_backlog(
     vault: Path,
     *,
@@ -322,6 +450,7 @@ def build_backlog(
             *_bundle_items(root),
             *_closure_items(root),
             *_project_timeline_items(root, link_format=link_format),
+            *_promotion_items(root),
         ]
     )
     summary = {
@@ -357,7 +486,8 @@ def render_backlog(report: dict[str, Any]) -> str:
         (
             f"Total: {report['summary']['total']} | Critical: {report['summary']['critical']} | "
             f"Needs ingest: {report['summary']['needs_ingest']} | "
-            f"Maintenance: {report['summary']['maintenance']}"
+            f"Maintenance: {report['summary']['maintenance']} | "
+            f"Reference: {report['summary']['reference']}"
         ),
         "",
     ]

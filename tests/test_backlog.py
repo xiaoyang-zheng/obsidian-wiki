@@ -12,6 +12,7 @@ from obsidian_wiki.context_pack import load_pages
 from obsidian_wiki.graph_analysis import parse_vault_graph
 from obsidian_wiki.graphrag import build_index
 from obsidian_wiki.lint import lint_vault
+from obsidian_wiki.promotion import ledger_path, observe_candidate, resolve_candidate
 from obsidian_wiki.source_bundles import create_source_bundle
 from obsidian_wiki.source_state import update_source
 
@@ -154,6 +155,178 @@ def test_backlog_reports_project_timeline_drift(tmp_path: Path) -> None:
 
     assert report["status"] == "warn"
     assert any(item["kind"] == "project-timeline" for item in report["items"])
+
+
+def test_backlog_surfaces_only_eligible_promotion_candidates(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    observe_candidate(
+        vault,
+        kind="concept",
+        canonical_title="Ready Concept",
+        source_lineage="paper:ready",
+        evidence_path="_sources/ready.md",
+        confidence=0.91,
+        core_contribution=True,
+        now="2026-09-04T10:00:00Z",
+    )
+    observe_candidate(
+        vault,
+        kind="entity",
+        canonical_title="Waiting Entity",
+        source_lineage="paper:waiting",
+        evidence_path="_sources/waiting.md",
+        confidence=0.60,
+        now="2026-09-04T10:01:00Z",
+    )
+
+    report = build_backlog(vault)
+
+    assert report["status"] == "warn"
+    assert report["summary"]["maintenance"] == 1
+    promotion_items = [
+        item for item in report["items"] if item["kind"] == "promotion-candidate"
+    ]
+    assert [item["subject"] for item in promotion_items] == [
+        "concept:ready-concept"
+    ]
+    assert "target=concepts/ready-concept.md" in promotion_items[0]["detail"]
+
+
+def test_backlog_batches_ambiguous_promotion_candidates_for_review(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    observe_candidate(
+        vault,
+        kind="concept",
+        canonical_title="Agent",
+        source_lineage="paper:a",
+        evidence_path="references/a.md",
+        confidence=0.95,
+        core_contribution=True,
+        ambiguous=True,
+        now="2026-09-04T10:00:00Z",
+    )
+
+    report = build_backlog(vault)
+
+    assert report["status"] == "warn"
+    assert report["summary"]["reference"] == 1
+    item = next(item for item in report["items"] if item["kind"] == "promotion-review")
+    assert item["subject"] == "concept:agent"
+    assert item["detail"] == "blocked=ambiguous"
+    assert "Reference: 1" in render_backlog(report)
+
+
+def test_backlog_does_not_reopen_rejected_ambiguous_candidate(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    observe_candidate(
+        vault,
+        kind="concept",
+        canonical_title="Rejected Ambiguity",
+        source_lineage="paper:a",
+        evidence_path="references/a.md",
+        confidence=0.95,
+        core_contribution=True,
+        ambiguous=True,
+        now="2026-09-04T10:00:00Z",
+    )
+    resolve_candidate(
+        vault,
+        kind="concept",
+        canonical_slug="rejected-ambiguity",
+        resolution="rejected",
+        reason="reviewed as too broad",
+        now="2026-09-04T10:01:00Z",
+    )
+
+    report = build_backlog(vault)
+
+    assert all(not item["kind"].startswith("promotion") for item in report["items"])
+
+
+def test_backlog_reports_untrusted_promotion_ledger_as_critical(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    path = ledger_path(vault)
+    path.parent.mkdir(parents=True)
+    path.write_text("{broken", encoding="utf-8")
+
+    report = build_backlog(vault)
+
+    assert report["status"] == "fail"
+    assert report["summary"]["critical"] == 1
+    assert report["items"][0]["kind"] == "promotion-ledger"
+    assert report["items"][0]["subject"] == "_meta/promotion-candidates.json"
+
+
+def test_backlog_reports_missing_promoted_page_as_critical(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    observe_candidate(
+        vault,
+        kind="entity",
+        canonical_title="Durable Entity",
+        source_lineage="paper:a",
+        evidence_path="references/a.md",
+        confidence=0.9,
+        core_contribution=True,
+        now="2026-09-04T10:00:00Z",
+    )
+    canonical = vault / "entities" / "durable-entity.md"
+    canonical.parent.mkdir()
+    canonical.write_text("# Durable Entity\n", encoding="utf-8")
+    resolve_candidate(
+        vault,
+        kind="entity",
+        canonical_slug="durable-entity",
+        resolution="promoted",
+        now="2026-09-04T10:01:00Z",
+    )
+    canonical.unlink()
+
+    report = build_backlog(vault)
+
+    assert report["status"] == "fail"
+    item = next(item for item in report["items"] if item["kind"] == "promotion-ledger")
+    assert item["subject"] == "entity:durable-entity"
+    assert "canonical_path=entities/durable-entity.md" in item["detail"]
+
+
+def test_backlog_accepts_existing_promoted_page(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    observe_candidate(
+        vault,
+        kind="concept",
+        canonical_title="Settled Concept",
+        source_lineage="paper:a",
+        evidence_path="references/a.md",
+        confidence=0.9,
+        core_contribution=True,
+        now="2026-09-04T10:00:00Z",
+    )
+    canonical = vault / "concepts" / "settled-concept.md"
+    canonical.parent.mkdir()
+    canonical.write_text("# Settled Concept\n", encoding="utf-8")
+    resolve_candidate(
+        vault,
+        kind="concept",
+        canonical_slug="settled-concept",
+        resolution="promoted",
+        now="2026-09-04T10:01:00Z",
+    )
+
+    report = build_backlog(vault)
+
+    assert all(not item["kind"].startswith("promotion") for item in report["items"])
 
 
 def test_write_backlog_and_skip_generated_page(tmp_path: Path) -> None:

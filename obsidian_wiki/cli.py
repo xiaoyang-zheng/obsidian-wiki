@@ -1402,6 +1402,123 @@ def cmd_source_bundles(args: argparse.Namespace) -> int:
     return 1 if report["status"] == "fail" else 0
 
 
+def cmd_paper_inspect(args: argparse.Namespace) -> int:
+    """Inspect one PDF into deterministic paper-ingest candidates."""
+    from obsidian_wiki.paper_inspect import PaperInspectError, inspect_paper
+
+    limits: dict[str, int] = {}
+    for key in (
+        "max_file_bytes",
+        "max_pages",
+        "max_candidates",
+        "max_text_chars_per_page",
+        "max_candidate_text_chars",
+        "max_export_image_bytes",
+        "max_total_export_bytes",
+    ):
+        value = getattr(args, key, None)
+        if value is not None:
+            limits[key] = value
+    try:
+        report = inspect_paper(
+            args.pdf,
+            source_url=args.source_url,
+            output_dir=args.output,
+            limits=limits or None,
+        )
+    except (OSError, PaperInspectError, ValueError) as exc:
+        if isinstance(exc, PaperInspectError):
+            payload = exc.as_dict()
+            print(json.dumps(payload, indent=2 if args.pretty else None))
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2 if args.pretty else None, ensure_ascii=False))
+    return 0
+
+
+def cmd_promotion_candidates(args: argparse.Namespace) -> int:
+    """List or inspect deterministic concept/entity promotion state."""
+    from obsidian_wiki.promotion import PromotionError, inspect_candidate, list_candidates
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    try:
+        if args.slug or args.title:
+            if not args.kind:
+                print("error: --kind is required with --slug or --title", file=sys.stderr)
+                return 1
+            report = inspect_candidate(
+                vault,
+                kind=args.kind,
+                canonical_slug=args.slug,
+                canonical_title=args.title,
+            )
+        else:
+            report = list_candidates(vault, state=args.state, kind=args.kind)
+    except (KeyError, PromotionError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2 if args.pretty else None, ensure_ascii=False))
+    return 0
+
+
+def cmd_promotion_observe(args: argparse.Namespace) -> int:
+    """Record one source lineage observation for a promotion candidate."""
+    from obsidian_wiki.promotion import PromotionError, observe_candidate
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    try:
+        report = observe_candidate(
+            vault,
+            kind=args.kind,
+            canonical_title=args.title,
+            canonical_slug=args.slug,
+            aliases=args.alias,
+            source_lineage=args.source_lineage,
+            evidence_path=args.evidence_path,
+            confidence=args.confidence,
+            core_contribution=args.core_contribution,
+            ambiguous=args.ambiguous,
+        )
+    except (KeyError, PromotionError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2 if args.pretty else None, ensure_ascii=False))
+    return 0
+
+
+def cmd_promotion_resolve(args: argparse.Namespace) -> int:
+    """Resolve one candidate after canonical write success or rejection."""
+    from obsidian_wiki.promotion import PromotionError, resolve_candidate
+
+    context = _resolve_schema_command_context(args.vault)
+    if context is None:
+        return 1
+    vault, _config, _config_source = context
+    try:
+        report = resolve_candidate(
+            vault,
+            kind=args.kind,
+            resolution=args.resolution,
+            canonical_slug=args.slug,
+            canonical_title=args.title,
+            canonical_path=args.canonical_path,
+            reason=args.reason,
+            resolved_by=args.resolved_by,
+        )
+    except (KeyError, PromotionError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2 if args.pretty else None, ensure_ascii=False))
+    return 0
+
+
 def cmd_cache_update(args: argparse.Namespace) -> int:
     from obsidian_wiki.cache import update_source
     vault = Path(args.vault).expanduser().resolve()
@@ -1505,7 +1622,8 @@ def _print_backlog(report: dict[str, object]) -> None:
         f"total: {summary['total']}  "
         f"critical: {summary['critical']}  "
         f"needs_ingest: {summary['needs_ingest']}  "
-        f"maintenance: {summary['maintenance']}"
+        f"maintenance: {summary['maintenance']}  "
+        f"reference: {summary['reference']}"
     )
     for item in report["items"]:
         print(f"  - [{item['severity']}] {item['title']}")
@@ -2397,6 +2515,76 @@ def build_parser() -> argparse.ArgumentParser:
     sbs.add_argument("--id", dest="bundle_id", action="append", metavar="ID", help="check only this bundle (repeatable)")
     sbs.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
     sbs.set_defaults(func=cmd_source_bundles)
+
+    pi = sub.add_parser(
+        "paper-inspect",
+        help="inspect a local PDF for stable paper identity and bounded ingest candidates",
+    )
+    pi.add_argument("pdf", help="local PDF path (read-only)")
+    pi.add_argument("--source-url", help="original URL used as an identity clue")
+    pi.add_argument(
+        "--output",
+        help="new output directory for inspect.json and extracted image candidates",
+    )
+    pi.add_argument("--max-file-bytes", type=int)
+    pi.add_argument("--max-pages", type=int)
+    pi.add_argument("--max-candidates", type=int)
+    pi.add_argument("--max-text-chars-per-page", type=int)
+    pi.add_argument("--max-candidate-text-chars", type=int)
+    pi.add_argument("--max-export-image-bytes", type=int)
+    pi.add_argument("--max-total-export-bytes", type=int)
+    pi.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    pi.set_defaults(func=cmd_paper_inspect)
+
+    pc = sub.add_parser(
+        "promotion-candidates",
+        help="list or inspect concept/entity candidates awaiting canonical promotion",
+    )
+    pc.add_argument(
+        "vault",
+        nargs="?",
+        help="vault path or @name (defaults via CWD .env, then global config)",
+    )
+    pc.add_argument("--state", choices=("candidate", "eligible", "promoted", "rejected"))
+    pc.add_argument("--kind", choices=("concept", "entity"))
+    identity = pc.add_mutually_exclusive_group()
+    identity.add_argument("--slug", help="inspect one canonical candidate slug")
+    identity.add_argument("--title", help="inspect one canonical candidate title")
+    pc.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    pc.set_defaults(func=cmd_promotion_candidates)
+
+    po = sub.add_parser(
+        "promotion-observe",
+        help="record one independent evidence observation for a promotion candidate",
+    )
+    po.add_argument("vault", nargs="?", help="vault path or @name")
+    po.add_argument("--kind", required=True, choices=("concept", "entity"))
+    po.add_argument("--title", required=True, help="canonical title")
+    po.add_argument("--slug", help="canonical slug (derived from title by default)")
+    po.add_argument("--alias", action="append", default=[], help="candidate alias (repeatable)")
+    po.add_argument("--source-lineage", required=True, help="independent source lineage id")
+    po.add_argument("--evidence-path", required=True, help="vault-relative evidence path")
+    po.add_argument("--confidence", required=True, type=float)
+    po.add_argument("--core-contribution", action="store_true")
+    po.add_argument("--ambiguous", action="store_true")
+    po.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    po.set_defaults(func=cmd_promotion_observe)
+
+    pr = sub.add_parser(
+        "promotion-resolve",
+        help="mark a candidate promoted after successful canonical write, or rejected",
+    )
+    pr.add_argument("vault", nargs="?", help="vault path or @name")
+    pr.add_argument("--kind", required=True, choices=("concept", "entity"))
+    pr.add_argument("--resolution", required=True, choices=("promoted", "rejected"))
+    resolution_identity = pr.add_mutually_exclusive_group(required=True)
+    resolution_identity.add_argument("--slug")
+    resolution_identity.add_argument("--title")
+    pr.add_argument("--canonical-path", help="vault-relative canonical page path")
+    pr.add_argument("--reason", help="resolution reason")
+    pr.add_argument("--resolved-by", help="workflow or reviewer identity")
+    pr.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    pr.set_defaults(func=cmd_promotion_resolve)
 
     cc = sub.add_parser(
         "cache-check",

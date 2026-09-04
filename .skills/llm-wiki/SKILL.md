@@ -254,6 +254,10 @@ Use this template only when the source is an academic paper (arXiv/conference) w
 ````markdown
 ---
 # ...required frontmatter, same as the generic template; category: references...
+paper_work_id: "arxiv:XXXX.XXXXX"
+paper_edition_id: "arxiv:XXXX.XXXXXvN"
+paper_editions: ["arxiv:XXXX.XXXXXvN"]
+paper_source_sha256: "sha256:<digest>"
 ---
 
 # Paper Title
@@ -300,6 +304,11 @@ What the paper concedes or sidesteps. Mark reading-between-the-lines as ^[inferr
 ## Related
 
 Typed `[[wikilinks]]` to neighbouring work.
+
+## Edition History
+
+Record each ingested edition ID and source hash when the work has multiple
+versions. Omit this section for a single edition.
 
 ## Sources
 

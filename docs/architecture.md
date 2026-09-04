@@ -62,7 +62,10 @@ separate packages; the core stores only generic IDs, opaque cursors, and health.
 
 The deterministic backlog is a generated maintenance queue, not a semantic TODO
 list. It aggregates source-state debt, source bundle integrity, source/entity
-closure, project timeline drift, and manifest filesystem drift. A clean backlog
+closure, project timeline drift, manifest filesystem drift, eligible
+concept/entity promotion plans, and ambiguous/conflicting candidates awaiting
+batched review. A corrupt or unsupported promotion ledger is a
+critical item. A clean backlog
 means the machine-checkable maintenance surface is clear; it does not mean the
 wiki has no semantic gaps.
 
@@ -85,6 +88,43 @@ either `entities: [entities/<name>, ...]` or `entities: none`. Every declared
 entity needs a link from the source page and a backlink to the source page.
 This makes source-to-entity evidence navigable in both directions without
 forcing a migration of older pages.
+
+## Paper identity and deterministic inspection
+
+Academic PDF ingestion starts with a read-only compiler pass. `paper-inspect`
+hashes the source and separates the identity of a research work from the
+identity of one edition: arXiv versions share a `work_id` but have distinct
+`edition_id` values; DOI is used when no arXiv identity is available; SHA-256 is
+the fail-closed fallback. This prevents filenames and mirrors from silently
+creating duplicate paper identities while preserving meaningful revisions.
+Paper reference pages persist `paper_work_id`, the current `paper_edition_id`,
+cumulative `paper_editions`, and `paper_source_sha256`; ingest searches the
+exact work ID before creating a page, so the identity contract survives beyond
+temporary inspection output.
+
+An optional PyMuPDF backend emits bounded, stable page/bbox candidates for
+captions, tables, formulas, and embedded images. These are extraction hints,
+not semantic truth. The ingest agent visually verifies selected candidates and
+copies only durable artifacts into an immutable source bundle. Without an
+output directory inspection is entirely read-only; an output directory is
+create-only and may never overwrite an earlier run. Page, candidate, text,
+per-image, and total-export limits bound work before durable output is accepted.
+
+## Concept and entity promotion
+
+Not every noun deserves a canonical graph node. Ingest records repeated
+concept/entity evidence in `_meta/promotion-candidates.json`, grouped by stable
+source lineage. The default deterministic policy marks a candidate eligible
+when a high-confidence core contribution is observed or when two independent
+high-confidence lineages corroborate it. Multiple editions of one paper remain
+one lineage. Ambiguity and label conflicts block automatic eligibility.
+
+Eligibility produces a page plan; it does not create Markdown. `wiki-ingest`
+owns canonical page creation and all normal provenance/index updates, then calls
+`promotion-resolve` only after the exact target page exists and the ingest is
+complete. Staged writes remain eligible until `wiki-stage-commit` accepts the
+page. The ledger is strict JSON, advisory-lock protected, and atomically
+replaced; terminal decisions do not reopen on a later observation.
 
 ## Code-aware project ingest
 
@@ -161,6 +201,8 @@ $OBSIDIAN_VAULT_PATH/
 ├── .manifest.lock          # Transient advisory lock held during manifest writes
 ├── _meta/
 │   ├── taxonomy.md         # Controlled tag vocabulary
+│   ├── promotion-candidates.json # Atomic concept/entity candidate ledger
+│   ├── promotion-candidates.lock # Persistent OS-lock inode; ignore in git
 │   └── *.base              # Obsidian Bases dashboard definitions
 ├── _insights.md            # Graph analysis: hubs, bridges, dead ends
 ├── _raw/                   # Staging — drop rough notes, next ingest promotes them

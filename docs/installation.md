@@ -27,6 +27,14 @@ uv tool install obsidian-wiki     # or: uv pip install obsidian-wiki
 pipx install obsidian-wiki
 ```
 
+For deterministic academic-PDF inspection and candidate image extraction,
+install the optional PyMuPDF backend:
+
+```bash
+uv tool install 'obsidian-wiki[paper]'
+# or: pip install 'obsidian-wiki[paper]'
+```
+
 Upgrades are `uv tool upgrade obsidian-wiki` / `pipx upgrade obsidian-wiki`; re-run `obsidian-wiki setup` afterwards to pick up new skills.
 
 > **Don't use `uvx obsidian-wiki setup`.** `uvx` runs from a throwaway environment, and setup symlinks skills *into the installed package*. When the environment is discarded, every skill link in `~/.claude/skills/`, `~/.codex/skills/`, and the rest points at a path that no longer exists. If you must run it that way, use `uvx obsidian-wiki setup --copy`, which copies the skill files instead.

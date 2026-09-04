@@ -34,12 +34,18 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+# Deterministic PDF metadata, text, image, table, and formula-candidate inspection.
+paper = ["PyMuPDF>=1.23"]
 # Higher-fidelity AST extraction (tree-sitter parses real ASTs; regex is the default fallback).
 ast = ["tree-sitter>=0.21", "tree-sitter-languages>=1.10"]
 # Higher-fidelity community detection (Leiden algorithm; greedy label propagation is the default fallback).
 graph = ["leidenalg>=0.10", "igraph>=0.11"]
 # HTTP + MCP memory server (obsidian_wiki/server.py). The core wheel stays dependency-free.
-server = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "mcp>=2.0"]
+server = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "mcp>=2.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/Ar9av/obsidian-wiki"
